@@ -30,9 +30,15 @@ function MissingKeyBanner() {
 export default function App() {
   const [text, setText] = useState('')
   const [hasAnalyzed, setHasAnalyzed] = useState(false)
+  const [hasRewrite, setHasRewrite] = useState(false)
 
   function handleAnalyze() {
     setHasAnalyzed(true)
+    setHasRewrite(false)
+  }
+
+  function handleRewrite() {
+    setHasRewrite(true)
   }
 
   return (
@@ -42,14 +48,18 @@ export default function App() {
         {!apiKey && <MissingKeyBanner />}
         <InputSection
           text={text}
-          onTextChange={setText}
+          onTextChange={(t) => {
+            setText(t)
+            setHasAnalyzed(false)
+            setHasRewrite(false)
+          }}
           onAnalyze={handleAnalyze}
         />
         {hasAnalyzed && (
-          <>
-            <ResultsSection text={text} />
-            <RewriteSection text={text} apiKey={apiKey ?? ''} />
-          </>
+          <ResultsSection text={text} onRewrite={handleRewrite} />
+        )}
+        {hasRewrite && (
+          <RewriteSection text={text} apiKey={apiKey ?? ''} />
         )}
       </div>
     </div>
