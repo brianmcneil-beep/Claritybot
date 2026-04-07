@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import './index.css'
 import Header from './components/Header'
 import InputSection from './components/InputSection'
@@ -27,14 +28,29 @@ function MissingKeyBanner() {
 }
 
 export default function App() {
+  const [text, setText] = useState('')
+  const [hasAnalyzed, setHasAnalyzed] = useState(false)
+
+  function handleAnalyze() {
+    setHasAnalyzed(true)
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
       <div className="max-w-4xl mx-auto bg-white shadow-sm min-h-screen">
         <Header />
         {!apiKey && <MissingKeyBanner />}
-        <InputSection />
-        <ResultsSection />
-        <RewriteSection />
+        <InputSection
+          text={text}
+          onTextChange={setText}
+          onAnalyze={handleAnalyze}
+        />
+        {hasAnalyzed && (
+          <>
+            <ResultsSection text={text} />
+            <RewriteSection text={text} apiKey={apiKey ?? ''} />
+          </>
+        )}
       </div>
     </div>
   )
