@@ -14,25 +14,35 @@ const BREAK_SENTINEL = '\u001F' // marks sentence boundaries before splitting
 /**
  * Preprocess text so sentence boundary markers are unambiguous.
  *
- * Insurance documents separate enumerated conditions with semicolons, not
- * periods. Each semicolon-delimited clause is functionally a sentence and
- * is treated as one here. This is the primary correction that brings
- * ClarityBot's sentence counts in line with tools like Readable.com.
+ * Insurance documents use several constructs that standard sentence splitters
+ * miss: semicolons separate enumerated conditions; paragraph breaks separate
+ * policy sections; numbered/lettered list items each contain a discrete
+ * obligation. We mark all of these as boundaries.
  */
 function markBoundaries(text: string): string {
-  // Step 1: neutralize abbreviation periods
+  // Step 1: neutralize abbreviation periods so they don't trigger splits
   const neutralized = text.replace(ABBREV_RE, (m) => m.replace('.', DOT_SENTINEL))
 
-  // Step 2: mark standard sentence endings ([.?!] followed by whitespace + capital)
-  const withStandard = neutralized.replace(
+  // Step 2: mark paragraph breaks (double newline) as sentence boundaries
+  const withParas = neutralized.replace(/\n{2,}/g, BREAK_SENTINEL)
+
+  // Step 3: mark standard sentence endings ([.?!] followed by whitespace + capital)
+  const withStandard = withParas.replace(
     /([.?!]['")\]]*)\s+(?=[A-Z])/g,
     `$1${BREAK_SENTINEL}`,
   )
 
-  // Step 3: mark semicolons as sentence boundaries
-  const withSemicolons = withStandard.replace(/;\s*/g, `${BREAK_SENTINEL}`)
+  // Step 4: mark semicolons as sentence boundaries (primary fix for enumerated lists)
+  const withSemicolons = withStandard.replace(/;\s*/g, BREAK_SENTINEL)
 
-  return withSemicolons
+  // Step 5: mark numbered list items (e.g. "1." "2." at start of line / after break)
+  // as sentence boundaries so each enumerated clause is counted separately
+  const withNumbered = withSemicolons.replace(
+    /(?<=\s|^)(\d+\.|[a-z]\.)(?=\s)/g,
+    `${BREAK_SENTINEL}$1`,
+  )
+
+  return withNumbered
 }
 
 /**

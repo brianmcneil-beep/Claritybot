@@ -4,6 +4,7 @@ import Header from './components/Header'
 import InputSection from './components/InputSection'
 import ResultsSection from './components/ResultsSection'
 import RewriteSection from './components/RewriteSection'
+import { scoreText, type ReadabilityScores } from './utils/readabilityScorer'
 
 const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
 
@@ -31,8 +32,10 @@ export default function App() {
   const [text, setText] = useState('')
   const [hasAnalyzed, setHasAnalyzed] = useState(false)
   const [hasRewrite, setHasRewrite] = useState(false)
+  const [analyzedScores, setAnalyzedScores] = useState<ReadabilityScores | null>(null)
 
   function handleAnalyze() {
+    setAnalyzedScores(scoreText(text))
     setHasAnalyzed(true)
     setHasRewrite(false)
   }
@@ -52,14 +55,19 @@ export default function App() {
             setText(t)
             setHasAnalyzed(false)
             setHasRewrite(false)
+            setAnalyzedScores(null)
           }}
           onAnalyze={handleAnalyze}
         />
         {hasAnalyzed && (
           <ResultsSection text={text} onRewrite={handleRewrite} />
         )}
-        {hasRewrite && (
-          <RewriteSection text={text} apiKey={apiKey ?? ''} />
+        {hasRewrite && analyzedScores && (
+          <RewriteSection
+            originalText={text}
+            originalScores={analyzedScores}
+            apiKey={apiKey ?? ''}
+          />
         )}
       </div>
     </div>

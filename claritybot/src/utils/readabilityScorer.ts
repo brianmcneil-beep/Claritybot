@@ -77,17 +77,46 @@ export function scoreText(text: string): ReadabilityScores {
 
 /**
  * Count words with 3 or more syllables (used by SMOG and Gunning Fog).
- * Deduplication is NOT applied here — every occurrence counts, not just
- * unique words, matching the standard formula definition.
+ *
+ * Per Gunning's original specification, words where the -ed or -es suffix
+ * alone pushes the count to 3 syllables are excluded. This prevents
+ * over-counting heavily inflected insurance text ("insured", "excluded",
+ * "damaged", "covered") which are all 3-syllable by suffix only.
+ *
+ * Exclusion test: strip the suffix and re-count; if the bare stem has < 3
+ * syllables, the word does not qualify as a "complex" word.
+ *
+ * Every occurrence counts (no deduplication) — matching standard formula.
  */
 function countPolysyllables(text: string): number {
   const wordRegex = /\b[a-zA-Z]+\b/g
   let count = 0
   let match: RegExpExecArray | null
   while ((match = wordRegex.exec(text)) !== null) {
-    if (rs.syllableCount(match[0]) >= 3) count++
+    const word = match[0]
+    if (isPolysyllable(word)) count++
   }
   return count
+}
+
+function isPolysyllable(word: string): boolean {
+  const syllCount = rs.syllableCount(word)
+  if (syllCount < 3) return false
+
+  const lower = word.toLowerCase()
+
+  // Gunning exclusion: if the word ends in -ed or -es and stripping the
+  // suffix drops the syllable count below 3, it does not count as complex.
+  if (lower.endsWith('ed') && syllCount === 3) {
+    const stem = lower.slice(0, -2)
+    if (stem.length >= 2 && rs.syllableCount(stem) < 3) return false
+  }
+  if (lower.endsWith('es') && syllCount === 3) {
+    const stem = lower.slice(0, -2)
+    if (stem.length >= 2 && rs.syllableCount(stem) < 3) return false
+  }
+
+  return true
 }
 
 function round(n: number, decimals: number): number {

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import { parseFile } from '../utils/fileParser'
 
 interface InputSectionProps {
@@ -10,15 +10,12 @@ interface InputSectionProps {
 export default function InputSection({ text, onTextChange, onAnalyze }: InputSectionProps) {
   const [parseError, setParseError] = useState<string | null>(null)
   const [isParsing, setIsParsing] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-
+  async function processFile(file: File) {
     setParseError(null)
     setIsParsing(true)
-
     try {
       const extracted = await parseFile(file)
       onTextChange(extracted)
@@ -27,46 +24,101 @@ export default function InputSection({ text, onTextChange, onAnalyze }: InputSec
       setParseError(message)
     } finally {
       setIsParsing(false)
-      // Reset file input so the same file can be re-uploaded after an error.
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (file) await processFile(file)
+  }
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+
+    const name = file.name.toLowerCase()
+    if (!name.endsWith('.txt') && !name.endsWith('.docx') && !name.endsWith('.pdf')) {
+      setParseError('Unsupported file type. Please drop a .txt, .docx, or .pdf file.')
+      return
+    }
+
+    await processFile(file)
+  }, [])
 
   const canAnalyze = text.trim().length > 0
 
   return (
     <section className="p-6 border-b border-gray-200">
-      <div className="flex items-center justify-between mb-3">
-        <label htmlFor="policy-text" className="text-sm font-medium text-gray-700">
-          Policy text
-        </label>
-        <div className="flex items-center gap-3">
-          {isParsing && (
-            <span className="text-sm text-gray-500 italic">Parsing file…</span>
-          )}
-          <label
-            htmlFor="file-upload"
-            className="cursor-pointer text-sm font-medium text-blue-600 hover:text-blue-700 underline underline-offset-2"
-          >
-            Upload file (.txt, .docx, .pdf)
-          </label>
-          <input
-            id="file-upload"
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,.docx,.pdf"
-            className="sr-only"
-            onChange={handleFileChange}
-          />
-        </div>
+      <label htmlFor="policy-text" className="block text-sm font-medium text-gray-700 mb-3">
+        Policy text
+      </label>
+
+      {/* Drag-and-drop zone */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+        className={`
+          mb-3 flex flex-col items-center justify-center gap-1
+          rounded-lg border-2 border-dashed px-4 py-5 cursor-pointer
+          transition-colors text-center
+          ${isDragOver
+            ? 'border-blue-400 bg-blue-50'
+            : 'border-gray-300 bg-gray-50 hover:border-blue-400 hover:bg-blue-50'
+          }
+        `}
+        role="button"
+        aria-label="Upload file by clicking or dragging and dropping"
+      >
+        {isParsing ? (
+          <span className="text-sm text-gray-500 italic">Parsing file…</span>
+        ) : (
+          <>
+            <svg className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+            </svg>
+            <p className="text-sm font-medium text-gray-600">
+              {isDragOver ? 'Drop to upload' : 'Drop a file here, or click to browse'}
+            </p>
+            <p className="text-xs text-gray-400">.txt, .docx, .pdf</p>
+          </>
+        )}
       </div>
+
+      <input
+        id="file-upload"
+        ref={fileInputRef}
+        type="file"
+        accept=".txt,.docx,.pdf"
+        className="sr-only"
+        onChange={handleFileChange}
+      />
 
       <textarea
         id="policy-text"
         rows={15}
         value={text}
         onChange={(e) => onTextChange(e.target.value)}
-        placeholder="Paste your policy text here, or upload a file above…"
+        placeholder="…or paste your policy text here."
         className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y font-mono leading-relaxed"
       />
 
