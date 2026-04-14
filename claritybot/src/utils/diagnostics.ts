@@ -1,5 +1,6 @@
 import jargonGlossary from '../data/jargonGlossary'
 import rs from 'text-readability'
+import { splitIntoSentences } from './sentenceUtils'
 
 export interface DiagnosticItem {
   text: string
@@ -15,17 +16,6 @@ export interface DiagnosticsResult {
 
 const LONG_SENTENCE_THRESHOLD = 25
 
-/**
- * Split text into individual sentences using the same delimiter pattern
- * as text-readability, then return each sentence with its word count.
- */
-function extractSentences(text: string): string[] {
-  return text
-    .split(/(?<=[.?!])\s+(?=[A-Z])/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-}
-
 /** Count words in a string (matches text-readability's lexiconCount logic). */
 function wordCount(text: string): number {
   return rs.lexiconCount(text)
@@ -38,7 +28,7 @@ function syllables(word: string): number {
 
 /** Flag sentences longer than LONG_SENTENCE_THRESHOLD words. */
 function detectLongSentences(text: string): DiagnosticItem[] {
-  const sentences = extractSentences(text)
+  const sentences = splitIntoSentences(text)
   const results: DiagnosticItem[] = []
 
   for (const sentence of sentences) {
