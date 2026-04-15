@@ -348,15 +348,30 @@ function detectLongWords(text: string): DiagnosticItem[] {
  * at the start of a sentence. These are NOT defined terms.
  */
 const DEFINED_TERM_STOPLIST = new Set([
+  // Pronouns and determiners
   'A', 'An', 'The', 'This', 'These', 'That', 'Those', 'It', 'Its',
   'We', 'Our', 'You', 'Your', 'They', 'Their', 'He', 'She', 'His', 'Her',
+  // Quantifiers and conjunctions
   'All', 'Any', 'Each', 'Both', 'Some', 'No', 'Not', 'Such', 'Other',
   'If', 'When', 'Where', 'While', 'Unless', 'Until', 'After', 'Before',
   'Under', 'Upon', 'With', 'Without', 'By', 'For', 'To', 'From', 'Of',
   'In', 'On', 'At', 'As', 'And', 'Or', 'But', 'However', 'Therefore',
+  // Calendar
   'January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December',
   'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+  // All 50 US states + DC + territories — geographic proper nouns are not policy-defined terms
+  'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado',
+  'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho',
+  'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana',
+  'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota',
+  'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada',
+  'Hampshire', 'Jersey', 'Mexico', 'York', 'Carolina', 'Dakota',
+  'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode', 'Island',
+  'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington',
+  'Wisconsin', 'Wyoming', 'Columbia', 'Puerto', 'Rico', 'Guam',
+  // Common state-law reference phrases that aren't policy-defined terms
+  'State', 'Federal', 'United', 'States', 'America', 'American',
 ])
 
 /**
