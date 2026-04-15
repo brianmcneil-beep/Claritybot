@@ -76,14 +76,19 @@ export async function parseDocx(file: File): Promise<string> {
 /**
  * Parse a .pdf file using pdf.js.
  *
- * We use the hasEOL flag that pdf.js sets on each TextItem to detect real
- * line breaks (paragraph ends, list item ends, section headers). When
- * hasEOL is true the item ends a visual line; we append a newline.
- * Otherwise items on the same line are joined with a space.
+ * The core challenge: pdfjs-dist splits text runs at style boundaries
+ * (bold/italic defined terms, font-size changes). Adjacent runs are NOT
+ * guaranteed to have a trailing space, so naive concatenation produces
+ * "causedbycollision" instead of "caused by collision".
  *
- * This is more reliable than Y-coordinate comparison, which can drop text
- * blocks whose transform scale differs from the document's dominant scale
- * (causing ~24% word-count loss on dense multi-section documents).
+ * Fix: after each item we calculate the expected x-position of the next
+ * character as currentX + itemWidth. If the next item starts significantly
+ * to the right of that position (gap > 0.25 × font-size), a word boundary
+ * exists and we insert a space. If the gap is small (≤ 0.25 × font-size),
+ * the items are part of the same word (e.g. bold mid-word) and we join
+ * directly.
+ *
+ * hasEOL is still used to emit real line breaks.
  */
 export async function parsePdf(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer()
@@ -95,13 +100,54 @@ export async function parsePdf(file: File): Promise<string> {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent({ includeMarkedContent: false })
 
+    const rawItems = content.items.filter((item) => 'str' in item) as Array<{
+      str: string
+      transform: number[]
+      width: number
+      height: number
+      hasEOL: boolean
+    }>
+
     const parts: string[] = []
-    for (const item of content.items) {
-      if (!('str' in item)) continue
-      const textItem = item as { str: string; hasEOL: boolean }
-      if (textItem.str.trim().length === 0 && !textItem.hasEOL) continue
-      parts.push(textItem.str)
-      if (textItem.hasEOL) parts.push('\n')
+    let prevEndX: number | null = null
+    let prevY: number | null = null
+
+    for (const item of rawItems) {
+      if (item.str.length === 0 && !item.hasEOL) continue
+
+      const x = item.transform[4]
+      const y = item.transform[5]
+      // Font size is the absolute value of transform[3] (scale y component).
+      const fontSize = Math.abs(item.transform[3]) || 12
+
+      if (prevY !== null && Math.abs(y - prevY) > fontSize * 0.5) {
+        // Different line — emit newline regardless of hasEOL
+        parts.push('\n')
+        prevEndX = null
+      } else if (prevEndX !== null && item.str.length > 0) {
+        const gap = x - prevEndX
+        // If the gap between the end of the last item and start of this one
+        // is more than 25% of the font size, treat it as a word boundary.
+        if (gap > fontSize * 0.25) {
+          // Ensure there's a space between words if the text doesn't already
+          // end/start with whitespace.
+          const lastPart = parts[parts.length - 1] ?? ''
+          if (lastPart.length > 0 && !/\s$/.test(lastPart) && !/^\s/.test(item.str)) {
+            parts.push(' ')
+          }
+        }
+      }
+
+      if (item.str.length > 0) {
+        parts.push(item.str)
+        prevEndX = x + item.width
+        prevY = y
+      }
+
+      if (item.hasEOL) {
+        parts.push('\n')
+        prevEndX = null
+      }
     }
 
     pageTexts.push(parts.join(''))

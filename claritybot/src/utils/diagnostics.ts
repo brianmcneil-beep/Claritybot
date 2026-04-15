@@ -110,39 +110,102 @@ function inferSectionLabel(sentence: string): string {
 // Detector: LONG_SENTENCE
 // ---------------------------------------------------------------------------
 
+/** Flag sentences longer than LONG_SENTENCE_THRESHOLD words, deduplicating identical text. */
 function detectLongSentences(text: string): DiagnosticItem[] {
   const sentences = splitIntoSentences(text)
-  const results: DiagnosticItem[] = []
+  // Map normalized sentence → { count, wordCount, first occurrence }
+  const seen = new Map<string, { count: number; wc: number; sentence: string }>()
+
   for (const sentence of sentences) {
-    const count = wordCount(sentence)
-    if (count > LONG_SENTENCE_THRESHOLD) {
-      results.push({
-        section_label: inferSectionLabel(sentence),
-        problem_text: sentence,
-        issue_type: 'LONG_SENTENCE',
-        why_problematic: `${count} words — sentences over ${LONG_SENTENCE_THRESHOLD} words are significantly harder for consumers to follow.`,
-        priority: count > 50 ? 'high' : count > 35 ? 'medium' : 'low',
-      })
+    const wc = wordCount(sentence)
+    if (wc <= LONG_SENTENCE_THRESHOLD) continue
+    const key = sentence.replace(/\s+/g, ' ').trim().toLowerCase()
+    const existing = seen.get(key)
+    if (existing) {
+      existing.count++
+    } else {
+      seen.set(key, { count: 1, wc, sentence })
     }
   }
-  return results
+
+  return [...seen.values()].map(({ count, wc, sentence }) => ({
+    section_label: inferSectionLabel(sentence),
+    problem_text: count > 1 ? `${sentence}  [appears ${count}× in document]` : sentence,
+    issue_type: 'LONG_SENTENCE' as IssueType,
+    why_problematic: `${wc} words${count > 1 ? ` (duplicated ${count} times — likely a boilerplate exclusion clause)` : ''} — sentences over ${LONG_SENTENCE_THRESHOLD} words are significantly harder for consumers to follow.`,
+    priority: (wc > 50 ? 'high' : wc > 35 ? 'medium' : 'low') as Priority,
+  }))
 }
 
 // ---------------------------------------------------------------------------
 // Detector: PASSIVE_VOICE
 // ---------------------------------------------------------------------------
 
+/**
+ * Returns a contextual explanation based on what the passive construction
+ * is hiding: responsibility (insurer/insured obligation), agent, or timing.
+ */
+function passiveWhyProblematic(auxiliary: string, participle: string): string {
+  const aux = auxiliary.toLowerCase()
+  const part = participle.toLowerCase()
+
+  if (['is', 'are', 'am'].includes(aux)) {
+    return `"${auxiliary} ${participle}" is a present passive — it hides who performs this action. Active voice names the responsible party directly.`
+  }
+  if (['was', 'were'].includes(aux)) {
+    return `"${auxiliary} ${participle}" is a past passive — it hides who was responsible for this action. Rewrite to name the actor (e.g., "we" or "you").`
+  }
+  if (aux === 'been') {
+    return `"been ${part}" is a perfect passive — it obscures when and by whom the action was completed. Active voice improves clarity.`
+  }
+  if (aux === 'being') {
+    return `"being ${part}" is a progressive passive — it hides who is currently performing the action. Consider active voice.`
+  }
+  return `Passive construction obscures who is responsible for "${part}." Active voice is clearer for consumers.`
+}
+
 function detectPassiveVoice(text: string): DiagnosticItem[] {
   const passiveRegex =
     /\b(am|is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?(\w+ed|\w+en|\w+wn|\w+nt)\b/gi
+
+  // Build a sentence lookup: for each character offset → sentence text
+  const sentences = splitIntoSentences(text)
+  // Map sentence text to itself for quick lookup by searching for the match offset
+  // We'll find the sentence containing each match by scanning sentences in order.
+
   const results: DiagnosticItem[] = []
+  const seenSentence = new Set<string>() // deduplicate by containing sentence
   let match: RegExpExecArray | null
+
   while ((match = passiveRegex.exec(text)) !== null) {
+    const phrase = match[0]
+    const auxiliary = match[1]
+    const participle = match[2]
+
+    // Find the sentence that contains this match offset
+    const offset = match.index
+    let containingSentence = phrase
+    let searchPos = 0
+    for (const sent of sentences) {
+      const idx = text.indexOf(sent, searchPos)
+      if (idx !== -1 && idx <= offset && offset < idx + sent.length) {
+        containingSentence = sent
+        searchPos = idx
+        break
+      }
+    }
+
+    // problem_text = containing sentence; deduplicate on sentence to avoid
+    // flagging the same sentence twice for two passive phrases within it
+    const key = containingSentence
+    if (seenSentence.has(key)) continue
+    seenSentence.add(key)
+
     results.push({
-      section_label: 'General',
-      problem_text: match[0],
+      section_label: inferSectionLabel(containingSentence),
+      problem_text: containingSentence,
       issue_type: 'PASSIVE_VOICE',
-      why_problematic: 'Passive construction obscures who is responsible for the action. Active voice is clearer for consumers.',
+      why_problematic: passiveWhyProblematic(auxiliary, participle),
       priority: 'low',
     })
   }
@@ -281,34 +344,110 @@ function detectLongWords(text: string): DiagnosticItem[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Flag capitalized defined terms (Title Case sequences that recur 5+ times).
- * Insurance policies define terms in ALL CAPS or Title Case. Overuse of a
- * defined term without plain-language anchoring confuses consumers who don't
- * read the Definitions section first.
+ * Single-word sentence-starters and common English words that are capitalized
+ * at the start of a sentence. These are NOT defined terms.
+ */
+const DEFINED_TERM_STOPLIST = new Set([
+  'A', 'An', 'The', 'This', 'These', 'That', 'Those', 'It', 'Its',
+  'We', 'Our', 'You', 'Your', 'They', 'Their', 'He', 'She', 'His', 'Her',
+  'All', 'Any', 'Each', 'Both', 'Some', 'No', 'Not', 'Such', 'Other',
+  'If', 'When', 'Where', 'While', 'Unless', 'Until', 'After', 'Before',
+  'Under', 'Upon', 'With', 'Without', 'By', 'For', 'To', 'From', 'Of',
+  'In', 'On', 'At', 'As', 'And', 'Or', 'But', 'However', 'Therefore',
+  'January', 'February', 'March', 'April', 'May', 'June', 'July',
+  'August', 'September', 'October', 'November', 'December',
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+])
+
+/**
+ * Flag capitalized defined terms (Title Case sequences that recur 5+ times
+ * within the same paragraph). "Per-paragraph" scope prevents footer/header
+ * boilerplate from inflating counts.
+ *
+ * Filters applied:
+ *  1. Stop-list — common English words capitalized at sentence start.
+ *  2. Bracketed placeholders — [Insurance Company], [Company Address], etc.
+ *  3. Repeated lines — lines that appear 3+ times across paragraphs are
+ *     treated as headers/footers and excluded from term extraction.
+ *  4. Minimum two-word requirement for single-word Title Case (prevents
+ *     "Coverage", "Policy" as standalone terms unless they recur within
+ *     the same paragraph 5+ times).
  */
 function detectDefinedTermOveruse(text: string): DiagnosticItem[] {
-  // Match 1–4 word Title Case sequences (each word starts with a capital,
-  // contains at least one lowercase letter — excludes acronyms like "ACV").
-  const termRegex = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g
-  const counts = new Map<string, number>()
-  let match: RegExpExecArray | null
-
-  while ((match = termRegex.exec(text)) !== null) {
-    const term = match[1]
-    // Exclude common sentence-starting capitalization and short stopwords
-    if (term.split(' ').length === 1 && term.length <= 3) continue
-    counts.set(term, (counts.get(term) ?? 0) + 1)
+  // Step 1: identify repeated lines (headers/footers) to exclude
+  const lines = text.split('\n')
+  const lineFreq = new Map<string, number>()
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.length > 0) lineFreq.set(trimmed, (lineFreq.get(trimmed) ?? 0) + 1)
   }
+  const repeatedLines = new Set(
+    [...lineFreq.entries()].filter(([, c]) => c >= 3).map(([l]) => l),
+  )
 
+  // Step 2: split into paragraphs, stripping repeated-line content
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) =>
+      p
+        .split('\n')
+        .filter((l) => !repeatedLines.has(l.trim()))
+        .join(' '),
+    )
+    .filter((p) => p.trim().length > 20)
+
+  // Step 3: per-paragraph term counting
+  // term → Set of paragraph indices where it appears (so we count paragraphs,
+  // then also track total occurrences for the why_problematic message)
+  const termParaSet = new Map<string, Set<number>>()
+  const termTotalCount = new Map<string, number>()
+
+  const termRegex = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g
+
+  paragraphs.forEach((para, paraIdx) => {
+    // Skip paragraphs that look like they contain only bracketed placeholders
+    if (/^\s*\[.*\]\s*$/.test(para)) return
+
+    termRegex.lastIndex = 0
+    let match: RegExpExecArray | null
+    const seenInPara = new Set<string>()
+
+    while ((match = termRegex.exec(para)) !== null) {
+      const raw = match[1]
+
+      // Filter: stop-list (single word)
+      const words = raw.split(/\s+/)
+      if (words.length === 1 && DEFINED_TERM_STOPLIST.has(raw)) continue
+
+      // Filter: bracketed placeholder anywhere adjacent
+      const before = para.slice(Math.max(0, match.index - 1), match.index)
+      const after = para.slice(match.index + raw.length, match.index + raw.length + 1)
+      if (before === '[' || after === ']') continue
+
+      // Filter: term is or contains only stoplist words
+      if (words.every((w) => DEFINED_TERM_STOPLIST.has(w))) continue
+
+      termTotalCount.set(raw, (termTotalCount.get(raw) ?? 0) + 1)
+      if (!seenInPara.has(raw)) {
+        seenInPara.add(raw)
+        if (!termParaSet.has(raw)) termParaSet.set(raw, new Set())
+        termParaSet.get(raw)!.add(paraIdx)
+      }
+    }
+  })
+
+  // Step 4: flag terms that appear in 3+ paragraphs (cross-section overuse)
   const results: DiagnosticItem[] = []
-  for (const [term, count] of counts.entries()) {
-    if (count >= 5) {
+  for (const [term, paraSet] of termParaSet.entries()) {
+    const paraCount = paraSet.size
+    const totalCount = termTotalCount.get(term) ?? 0
+    if (paraCount >= 3) {
       results.push({
         section_label: 'General',
         problem_text: term,
         issue_type: 'DEFINED_TERM_OVERUSE',
-        why_problematic: `Appears ${count} times. Defined terms repeated frequently without plain-language anchoring can confuse consumers who haven't read the Definitions section. Consider adding a brief parenthetical definition on first use.`,
-        priority: count >= 10 ? 'high' : 'medium',
+        why_problematic: `Used in ${paraCount} sections (${totalCount} total occurrences). Defined terms repeated across sections without plain-language anchoring can confuse consumers who haven't read the Definitions section. Consider adding a brief inline definition on first use.`,
+        priority: paraCount >= 5 ? 'high' : 'medium',
       })
     }
   }
