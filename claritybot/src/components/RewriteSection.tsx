@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Anthropic from '@anthropic-ai/sdk'
 import {
   scoreText,
@@ -15,40 +15,181 @@ interface RewriteSectionProps {
   apiKey: string
 }
 
-const SYSTEM_PROMPT = `You are a plain-language editor for insurance policy forms. Rewrite the form below to improve readability for an average consumer (target: 7th–9th grade reading level), while preserving all coverage terms, exclusions, conditions, and legal meaning. Follow these additional rules:
+// ---------------------------------------------------------------------------
+// Verbatim system prompt — do not modify
+// ---------------------------------------------------------------------------
 
-- Break long sentences into shorter ones (target 15–20 words per sentence).
-- Eliminate double negatives.
-- Flatten nested conditionals into direct statements.
-- Replace nominalizations with verb forms (e.g., "make a determination" → "determine").
-- Preserve "shall," "must," and "may" distinctions exactly — these have legal significance.
-- Use "you/your" for the policyholder and "we/our" for the insurer where appropriate.
-- Do not add coverage. Do not remove coverage.
-- Do not change defined terms (capitalized terms in the original) unless the change is purely stylistic.
-- Keep the same overall structure (sections, numbering, headers).
+const SYSTEM_PROMPT = `You are ClarityBot, a senior insurance policy plain-language specialist.
+Your job is to improve readability while preserving legal meaning, coverage intent, conditions, exclusions, definitions, and operative effect.
+═══════════════════════════════════════════════
+ROLE SEPARATION — THIS IS CRITICAL
+═══════════════════════════════════════════════
+You are performing TWO distinct tasks in this response. You MUST treat them as independent operations:
+TASK A — JARGON ANALYSIS: Identify and classify problematic sentences. For each one, explain the issue and propose a revision. This is an ANALYTICAL task — be precise, conservative, and evidence-based.
+TASK B — FULL DOCUMENT REWRITE: Rewrite the entire document for readability. This is a CONSTRAINED CREATIVE task — you may only change what needs changing. Every sentence that already meets readability standards MUST appear in the rewrite VERBATIM, character-for-character.
+═══════════════════════════════════════════════
+REWRITE RULES (apply to both tasks)
+═══════════════════════════════════════════════
 
-After the rewritten form, append a section with exactly this heading on its own line:
-LEGAL INTEGRITY VERIFICATION
-Then provide a brief confirmation (3–5 bullet points) that exclusions, conditions, and defined terms were preserved unchanged, noting any specific items checked.
+Do not add, remove, broaden, narrow, or reinterpret coverage.
+Do not change legal effect.
+Preserve document structure, section ordering, headings, and defined terms unless a clearer substitute is clearly safe.
+Prefer minimal edits. Leave already clear sentences unchanged unless revision is needed for consistency, flow, or legal clarity.
+Break long or run-on sentences into shorter ones where safe (target 15–20 words per sentence).
+Replace jargon and legalese with plain language where safe.
+Convert passive voice to active voice where safe.
+Eliminate double negatives where safe.
+Use "you" and "we" instead of "the insured" and "the company" where appropriate and legally safe.
+If language appears statutory, quoted, or state-mandated, preserve it unless clearly editable without changing meaning.
+Preserve "shall," "must," and "may" distinctions exactly — these have legal significance.
 
-Return only the rewritten form text followed by the Legal Integrity Verification section. No preamble, no commentary, no markdown formatting.`
+═══════════════════════════════════════════════
+SCORING ANCHOR — READ THIS CAREFULLY
+═══════════════════════════════════════════════
+The Flesch-Kincaid Reading Ease is computed as:
+FRE = 206.835 - 1.015 × (total_words / total_sentences) - 84.6 × (total_syllables / total_words)
+The FK Grade Level is computed as:
+FKGL = 0.39 × (total_words / total_sentences) + 11.8 × (total_syllables / total_words) - 15.59
+When you write a rewrite, mentally verify:
+
+Did I reduce the word count per sentence (by splitting or tightening)?
+Did I reduce the average syllable count per word (by replacing complex words)?
+If neither changed, the FRE will NOT improve — do not produce cosmetic-only edits.
+
+The CALLER will independently score your rewrite using the exact formulas above. Your work will be graded by math, not by subjective judgment. Do not over-rewrite sentences that are already compliant — this wastes effort and risks changing legal meaning for no score benefit.
+═══════════════════════════════════════════════
+OUTPUT STRUCTURE — RETURN ALL THREE SECTIONS
+═══════════════════════════════════════════════
+Rewritten Document
+The complete rewritten text. Compliant sentences appear unchanged. Mark each revised sentence by appending [REVISED] at the end of that sentence.
+Change Summary
+A bulleted list of every change made. For each:
+
+Section reference
+Brief description of what changed and why
+The issue type addressed (LONG_SENTENCE, PASSIVE_VOICE, etc.)
+
+Legal Integrity Verification
+Confirm in plain text:
+
+All exclusions preserved (list them by section)
+All conditions preserved
+All defined terms unchanged
+No coverage added or removed
+All statutory or quoted language left intact`
+
+// ---------------------------------------------------------------------------
+// Response parsing — three-section structure
+// ---------------------------------------------------------------------------
+
+interface ParsedResponse {
+  rewrittenDocument: string
+  changeSummary: string
+  legalVerification: string
+  malformed: boolean
+  raw: string
+}
 
 /**
- * Split the API response into the rewrite body and the Legal Integrity
- * Verification section. The model is instructed to use the heading
- * "LEGAL INTEGRITY VERIFICATION" on its own line as a delimiter.
+ * The model is instructed to output three sections delimited by the headings:
+ *   "Rewritten Document"
+ *   "Change Summary"
+ *   "Legal Integrity Verification"
+ *
+ * We match these as case-insensitive headings on their own line.
+ * If any section is missing, malformed=true and the raw text is preserved.
  */
-function splitResponse(raw: string): { rewriteBody: string; legalVerification: string } {
-  const marker = /^LEGAL INTEGRITY VERIFICATION\s*$/im
-  const match = marker.exec(raw)
-  if (!match || match.index === undefined) {
-    return { rewriteBody: raw.trim(), legalVerification: '' }
+function parseResponse(raw: string): ParsedResponse {
+  const rewrittenDocRe = /^Rewritten Document\s*$/im
+  const changeSummaryRe = /^Change Summary\s*$/im
+  const legalVerificationRe = /^Legal Integrity Verification\s*$/im
+
+  const m1 = rewrittenDocRe.exec(raw)
+  const m2 = changeSummaryRe.exec(raw)
+  const m3 = legalVerificationRe.exec(raw)
+
+  const malformed = !m1 || !m2 || !m3
+
+  if (malformed) {
+    return {
+      rewrittenDocument: '',
+      changeSummary: '',
+      legalVerification: '',
+      malformed: true,
+      raw,
+    }
   }
+
+  const docStart = m1.index + m1[0].length
+  const summaryStart = m2.index + m2[0].length
+  const livStart = m3.index + m3[0].length
+
   return {
-    rewriteBody: raw.slice(0, match.index).trim(),
-    legalVerification: raw.slice(match.index + match[0].length).trim(),
+    rewrittenDocument: raw.slice(docStart, m2.index).trim(),
+    changeSummary: raw.slice(summaryStart, m3.index).trim(),
+    legalVerification: raw.slice(livStart).trim(),
+    malformed: false,
+    raw,
   }
 }
+
+/** Heuristic: scan the Legal Integrity Verification text for problem signals. */
+function livHasWarning(liv: string): boolean {
+  const problemPatterns = [
+    /coverage (added|removed|changed|broadened|narrowed)/i,
+    /exclusion.{0,30}(changed|removed|altered|missing)/i,
+    /defined term.{0,30}(changed|altered|removed)/i,
+    /unable to (verify|confirm|preserve)/i,
+    /could not (verify|confirm|preserve)/i,
+    /\bcannot confirm\b/i,
+    /\bnot preserved\b/i,
+    /\bmodified the (exclusion|condition|definition)\b/i,
+  ]
+  return problemPatterns.some((re) => re.test(liv))
+}
+
+// ---------------------------------------------------------------------------
+// Streaming API call
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens a streaming request via client.messages.stream().
+ * Calls onDelta with each text delta as it arrives.
+ * Returns the final accumulated text.
+ * Accepts an AbortController signal for cancellation.
+ */
+async function streamRewrite(
+  apiKey: string,
+  text: string,
+  onDelta: (accumulated: string) => void,
+  signal: AbortSignal,
+): Promise<string> {
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
+
+  const stream = client.messages.stream({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 4096,
+    temperature: 0.2,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: text }],
+  })
+
+  // Abort handling: if the signal fires, destroy the stream
+  signal.addEventListener('abort', () => stream.abort(), { once: true })
+
+  let accumulated = ''
+  stream.on('text', (delta: string) => {
+    accumulated += delta
+    onDelta(accumulated)
+  })
+
+  await stream.finalMessage()
+  return accumulated
+}
+
+// ---------------------------------------------------------------------------
+// Score comparison table
+// ---------------------------------------------------------------------------
 
 interface ScoreRowProps {
   label: string
@@ -68,91 +209,119 @@ function ScoreRow({ label, original, rewrite, higherIsBetter, interpretation }: 
   return (
     <tr className="border-t border-gray-100">
       <td className="py-2 pr-4 text-sm font-medium text-gray-700 whitespace-nowrap">{label}</td>
-      <td className="py-2 pr-4 text-sm text-gray-600 text-right">{original}</td>
-      <td className="py-2 pr-4 text-sm text-gray-600 text-right">{rewrite}</td>
-      <td className={`py-2 text-sm font-semibold text-right ${color}`}>
-        {same ? '—' : `${sign}${round(delta, 1)}`}
+      <td className="py-2 pr-4 text-sm text-gray-600 text-right tabular-nums">{original}</td>
+      <td className="py-2 pr-4 text-sm text-gray-600 text-right tabular-nums">{rewrite}</td>
+      <td className={`py-2 text-sm font-semibold text-right tabular-nums ${color}`}>
+        {same ? '—' : `${sign}${roundNum(delta, 1)}`}
       </td>
       <td className="py-2 pl-4 text-xs text-gray-400 hidden sm:table-cell">{interpretation}</td>
     </tr>
   )
 }
 
-function round(n: number, decimals: number): number {
+function roundNum(n: number, decimals: number): number {
   return Math.round(n * (10 ** decimals)) / (10 ** decimals)
 }
 
-async function callApi(apiKey: string, text: string): Promise<string> {
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
-  const message = await client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: text }],
-  })
-  const content = message.content[0]
-  if (content.type !== 'text') throw new Error('Unexpected response format from API.')
-  return content.text
-}
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export default function RewriteSection({ originalText, originalScores, apiKey }: RewriteSectionProps) {
-  const [rawResponse, setRawResponse] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const [streamedText, setStreamedText] = useState('')
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [isDone, setIsDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
+    abortRef.current = controller
 
-    // Kick off immediately; initial state is already loading=false/error=null/response=null
-    // from useState — we update asynchronously to satisfy the lint rule against
-    // synchronous setState inside effects.
     async function run() {
-      if (cancelled) return
-      setIsLoading(true)
+      setIsStreaming(true)
+      setIsDone(false)
       setError(null)
-      setRawResponse(null)
+      setStreamedText('')
       try {
-        const result = await callApi(apiKey, originalText)
-        if (!cancelled) setRawResponse(result)
+        await streamRewrite(
+          apiKey,
+          originalText,
+          (accumulated) => {
+            if (!controller.signal.aborted) setStreamedText(accumulated)
+          },
+          controller.signal,
+        )
+        if (!controller.signal.aborted) setIsDone(true)
       } catch (err: unknown) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Unknown error. Please try again.')
+        if (controller.signal.aborted) return
+        setError(err instanceof Error ? err.message : 'Unknown error. Please try again.')
       } finally {
-        if (!cancelled) setIsLoading(false)
+        if (!controller.signal.aborted) setIsStreaming(false)
       }
     }
 
     run()
-    return () => { cancelled = true }
+    return () => controller.abort()
   }, [originalText, apiKey])
 
   function handleRetry() {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setError(null)
-    setRawResponse(null)
-    setIsLoading(true)
-    callApi(apiKey, originalText)
-      .then((text) => setRawResponse(text))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Unknown error.'))
-      .finally(() => setIsLoading(false))
+    setStreamedText('')
+    setIsDone(false)
+    setIsStreaming(true)
+
+    streamRewrite(
+      apiKey,
+      originalText,
+      (accumulated) => {
+        if (!controller.signal.aborted) setStreamedText(accumulated)
+      },
+      controller.signal,
+    )
+      .then(() => { if (!controller.signal.aborted) setIsDone(true) })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return
+        setError(err instanceof Error ? err.message : 'Unknown error.')
+      })
+      .finally(() => { if (!controller.signal.aborted) setIsStreaming(false) })
   }
 
-  const parsed = rawResponse ? splitResponse(rawResponse) : null
-  const rewriteScores = parsed ? scoreText(parsed.rewriteBody) : null
+  // Only parse the full response once streaming is complete — avoid parsing
+  // mid-stream text where section headings may not yet have arrived.
+  const parsed: ParsedResponse | null = isDone ? parseResponse(streamedText) : null
+  const rewriteScores = parsed && !parsed.malformed ? scoreText(parsed.rewrittenDocument) : null
+  const showLivWarning = parsed && !parsed.malformed && livHasWarning(parsed.legalVerification)
 
   return (
     <section className="p-6">
       <h2 className="text-base font-semibold text-gray-900 mb-4">Plain-Language Rewrite</h2>
 
-      {isLoading && (
-        <div className="flex items-center gap-3 text-gray-500 text-sm">
-          <svg className="animate-spin h-5 w-5 text-indigo-500 shrink-0" xmlns="http://www.w3.org/2000/svg"
-            fill="none" viewBox="0 0 24 24" aria-hidden="true">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span>Generating rewrite — this may take 10–30 seconds…</span>
+      {/* Loading / streaming indicator */}
+      {isStreaming && (
+        <div className="mb-4">
+          <div className="flex items-center gap-3 text-gray-500 text-sm mb-3">
+            <svg className="animate-spin h-5 w-5 text-indigo-500 shrink-0" xmlns="http://www.w3.org/2000/svg"
+              fill="none" viewBox="0 0 24 24" aria-hidden="true">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span>Generating rewrite — streaming…</span>
+          </div>
+          {/* Live stream preview */}
+          {streamedText && (
+            <pre className="rounded-xl border border-indigo-100 bg-indigo-50 px-5 py-4 text-sm text-gray-700 whitespace-pre-wrap leading-relaxed font-sans opacity-75 max-h-72 overflow-y-auto">
+              {streamedText}
+            </pre>
+          )}
         </div>
       )}
 
+      {/* Error state */}
       {error && (
         <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           <p className="font-semibold">Rewrite failed</p>
@@ -164,12 +333,33 @@ export default function RewriteSection({ originalText, originalScores, apiKey }:
         </div>
       )}
 
-      {parsed && rewriteScores && (
+      {/* Malformed output warning */}
+      {parsed?.malformed && (
+        <div role="alert" className="mb-4 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900">
+          <p className="font-semibold">Output format warning</p>
+          <p className="mt-1">The model did not return all three expected sections (Rewritten Document / Change Summary / Legal Integrity Verification). The raw output is shown below.</p>
+          <pre className="mt-3 rounded bg-yellow-100 px-4 py-3 text-xs whitespace-pre-wrap break-words">
+            {parsed.raw}
+          </pre>
+        </div>
+      )}
+
+      {/* Parsed output — only shown when streaming is done and output is well-formed */}
+      {parsed && !parsed.malformed && rewriteScores && (
         <>
+          {/* LIV problem warning */}
+          {showLivWarning && (
+            <div role="alert" className="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
+              <p className="font-semibold">⚠ Legal Integrity Warning</p>
+              <p className="mt-1">The Legal Integrity Verification section may indicate a problem with preserved coverage, exclusions, or defined terms. Review carefully before use.</p>
+            </div>
+          )}
+
           {/* Before / after score comparison */}
           <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden">
             <div className="px-5 py-3 bg-gray-100 border-b border-gray-200">
               <h3 className="text-sm font-semibold text-gray-700">Score comparison — original vs. rewrite</h3>
+              <p className="text-xs text-gray-400 mt-0.5">Scores computed locally using the calibrated readability engine.</p>
             </div>
             <div className="px-5 py-2 overflow-x-auto">
               <table className="w-full">
@@ -183,53 +373,52 @@ export default function RewriteSection({ originalText, originalScores, apiKey }:
                   </tr>
                 </thead>
                 <tbody>
-                  <ScoreRow
-                    label="Flesch Reading Ease"
-                    original={originalScores.fleschReadingEase}
-                    rewrite={rewriteScores.fleschReadingEase}
-                    higherIsBetter={true}
-                    interpretation={interpretFleschReadingEase(rewriteScores.fleschReadingEase)}
-                  />
-                  <ScoreRow
-                    label="FK Grade Level"
-                    original={originalScores.fleschKincaidGrade}
-                    rewrite={rewriteScores.fleschKincaidGrade}
-                    higherIsBetter={false}
-                    interpretation={interpretFleschKincaidGrade(rewriteScores.fleschKincaidGrade)}
-                  />
-                  <ScoreRow
-                    label="SMOG Index"
-                    original={originalScores.smogIndex}
-                    rewrite={rewriteScores.smogIndex}
-                    higherIsBetter={false}
-                    interpretation={interpretSmog(rewriteScores.smogIndex)}
-                  />
-                  <ScoreRow
-                    label="Gunning Fog"
-                    original={originalScores.gunningFog}
-                    rewrite={rewriteScores.gunningFog}
-                    higherIsBetter={false}
-                    interpretation={interpretGunningFog(rewriteScores.gunningFog)}
-                  />
+                  <ScoreRow label="Flesch Reading Ease"
+                    original={originalScores.fleschReadingEase} rewrite={rewriteScores.fleschReadingEase}
+                    higherIsBetter={true} interpretation={interpretFleschReadingEase(rewriteScores.fleschReadingEase)} />
+                  <ScoreRow label="FK Grade Level"
+                    original={originalScores.fleschKincaidGrade} rewrite={rewriteScores.fleschKincaidGrade}
+                    higherIsBetter={false} interpretation={interpretFleschKincaidGrade(rewriteScores.fleschKincaidGrade)} />
+                  <ScoreRow label="SMOG Index"
+                    original={originalScores.smogIndex} rewrite={rewriteScores.smogIndex}
+                    higherIsBetter={false} interpretation={interpretSmog(rewriteScores.smogIndex)} />
+                  <ScoreRow label="Gunning Fog"
+                    original={originalScores.gunningFog} rewrite={rewriteScores.gunningFog}
+                    higherIsBetter={false} interpretation={interpretGunningFog(rewriteScores.gunningFog)} />
+                  <ScoreRow label="Word count"
+                    original={originalScores.wordCount} rewrite={rewriteScores.wordCount}
+                    higherIsBetter={false} interpretation={`${rewriteScores.wordCount.toLocaleString()} words`} />
+                  <ScoreRow label="Sentence count"
+                    original={originalScores.sentenceCount} rewrite={rewriteScores.sentenceCount}
+                    higherIsBetter={true} interpretation={`${rewriteScores.sentenceCount.toLocaleString()} sentences`} />
                 </tbody>
               </table>
             </div>
           </div>
 
-          {/* Rewritten text */}
-          <pre className="rounded-xl border border-indigo-100 bg-indigo-50 px-5 py-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed font-sans">
-            {parsed.rewriteBody}
+          {/* Rewritten Document */}
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Rewritten Document</h3>
+          <pre className="mb-6 rounded-xl border border-indigo-100 bg-indigo-50 px-5 py-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed font-sans">
+            {parsed.rewrittenDocument}
           </pre>
 
+          {/* Change Summary */}
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Change Summary</h3>
+          <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 px-5 py-4">
+            <pre className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed font-sans">
+              {parsed.changeSummary}
+            </pre>
+          </div>
+
           {/* Legal Integrity Verification */}
-          {parsed.legalVerification && (
-            <div className="mt-5 rounded-xl border border-green-200 bg-green-50 px-5 py-4">
-              <h3 className="text-sm font-semibold text-green-800 mb-2">Legal Integrity Verification</h3>
-              <pre className="text-sm text-green-900 whitespace-pre-wrap leading-relaxed font-sans">
-                {parsed.legalVerification}
-              </pre>
-            </div>
-          )}
+          <h3 className={`text-sm font-semibold mb-2 ${showLivWarning ? 'text-red-700' : 'text-green-700'}`}>
+            Legal Integrity Verification
+          </h3>
+          <div className={`rounded-xl border px-5 py-4 ${showLivWarning ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}`}>
+            <pre className={`text-sm whitespace-pre-wrap leading-relaxed font-sans ${showLivWarning ? 'text-red-900' : 'text-green-900'}`}>
+              {parsed.legalVerification}
+            </pre>
+          </div>
         </>
       )}
     </section>
