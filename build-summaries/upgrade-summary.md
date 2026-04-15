@@ -93,9 +93,30 @@ Brian is running real forms through the diagnostics to validate Change Set D bef
 
 ---
 
+## Syllable counter investigation (Brian request, 2026-04-07)
+
+**Question:** Would switching from `text-readability`'s built-in syllable counter to the `syllable` npm package close the ~4-point FRE gap vs. Readable.com?
+
+**Finding: No change possible or needed.** `text-readability` already delegates `syllableCount()` directly to the `syllable` npm package (`syllable@5.0.1`). Every word-level result is identical between `rs.syllableCount(word)` and `syllable(word)` (verified programmatically). There is no alternative to switch to.
+
+**Root cause of FRE gap (decomposed mathematically):**
+
+The Flesch formula has two inputs: words/sentence (W/S) and syllables/word (Syl/W). Solving the two-equation system (FRE + FK) for both tools simultaneously on COLLCOMP:
+
+| Input | ClarityBot | Readable.com | Effect on FRE |
+|---|---|---|---|
+| Words/sentence | 11.32 | 12.82 | ClarityBot splits more sentences → FRE **higher** |
+| Syllables/word | 1.659 | 1.687 | ClarityBot counts slightly fewer syllables → FRE **higher** |
+
+Both differences push ClarityBot's FRE **above** Readable's, not below. The gap is entirely at the sentence-segmentation layer. The two tools count the same underlying syllables but disagree on sentence boundaries, which changes W/S and cascades through both FRE and FK. The CMU Pronouncing Dictionary would not close this gap for the same reason.
+
+**Conclusion:** The ~4-point FRE gap is a sentence-boundary calibration residual, not a syllable-counting error. Closing it further requires more refined sentence detection (e.g. distinguishing enumeration continuations from true sentence starts). Tracked as known open issue. No code changes made.
+
+---
+
 ## Open questions / next steps
 
 1. **Change Set F (markdown rendering):** Awaiting Brian's approval after API key testing. Dependency question: can `marked` or `react-markdown` be added, or use regex renderer?
-2. **BASE form gap:** COLLCOMP and GAP are within ~1.5–4 grades of Readable.com; BASE still shows ~4-grade gap. Likely residual sentence-boundary misses in the full base policy. Tracked as known open issue.
+2. **BASE form gap / FRE residual:** COLLCOMP and GAP are within ~1.5–4 grades of Readable.com. Gap is sentence-boundary calibration, not syllable counting (see syllable investigation above). Tracked as known open issue.
 3. **Long-sentence diagnostic signal:** Zero long sentences on COLLCOMP after splitter calibration. A "dense paragraph" detector (flags paragraphs with high avg syllables/word even if individual sentences are short) could recover signal. Deferred to future phase.
 4. **Geographic stop-list completeness:** Multi-word state references ("New York," "New Mexico," "New Hampshire," "North Carolina," "South Carolina," "North Dakota," "South Dakota," "Rhode Island," "West Virginia") are split into component words in the stop-list. Multi-word geography detection may need a secondary phrase filter if these appear as two-word Title Case sequences. Monitor in testing.
