@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect } from 'react'
 import {
   scoreText,
   interpretFleschReadingEase,
@@ -13,13 +14,87 @@ interface ResultsSectionProps {
 }
 
 // ---------------------------------------------------------------------------
+// Methodology notes — one per metric
+// ---------------------------------------------------------------------------
+
+const METHODOLOGY_NOTES: Record<string, string> = {
+  'Flesch Reading Ease':
+    'ClarityBot\'s sentence segmentation treats enumerated policy clauses (numbered lists, semicolon-separated obligations, bulleted exclusions) as discrete sentences. This is more accurate for insurance forms than tools designed for general prose. As a result, ClarityBot\'s Flesch Reading Ease may read approximately 4–5 points higher than Readable.com on the same text. The underlying formula is identical; the difference is sentence boundary detection.',
+
+  'Flesch-Kincaid Grade':
+    'The Flesch-Kincaid Grade Level formula shares the same sentence segmentation as Flesch Reading Ease. Because ClarityBot correctly splits enumerated insurance clauses into shorter sentence units, the grade level will typically read 1–2 grades lower than tools designed for prose. This is intentional — those shorter clauses are shorter obligations, and counting them as one run-on sentence would overstate difficulty.',
+
+  'SMOG Index':
+    'SMOG (Simple Measure of Gobbledygook) counts polysyllabic words per 30 sentences and is particularly sensitive to sentence count. ClarityBot\'s calibrated splitter produces more sentence units from enumerated clauses, so SMOG scores will typically run ~3 grades lower than Readable.com on the same insurance text. SMOG is most reliable on documents with at least 30 sentences; on short extracts the formula\'s extrapolation introduces variance regardless of the segmentation approach.',
+
+  'Gunning Fog':
+    'Gunning Fog counts complex words (3+ syllables) as a fraction of total words, weighted by sentence length. ClarityBot applies Gunning\'s original -ed/-es suffix exclusion rule, which prevents over-counting heavily inflected insurance vocabulary (insured, excluded, covered, damaged) that are only polysyllabic due to their suffix. This exclusion is standard in the original Fog specification but omitted by some tools, which is why ClarityBot\'s Fog scores may differ from those tools.',
+}
+
+// ---------------------------------------------------------------------------
+// Info popover
+// ---------------------------------------------------------------------------
+
+function InfoPopover({ metricLabel }: { metricLabel: string }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const note = METHODOLOGY_NOTES[metricLabel]
+
+  // Close on outside click — hook must be called unconditionally
+  useEffect(() => {
+    if (!open || !note) return
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open, note])
+
+  if (!note) return null
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        aria-label={`About ${metricLabel} methodology`}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full text-gray-400 hover:text-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
+      >
+        <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4" aria-hidden="true">
+          <path fillRule="evenodd" clipRule="evenodd"
+            d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8.75-2.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM7.25 6.5a.75.75 0 0 1 .75-.75h.25a.75.75 0 0 1 .75.75v3.25h.25a.75.75 0 0 1 0 1.5h-1.5a.75.75 0 0 1 0-1.5h.25V7.25H8a.75.75 0 0 1-.75-.75Z" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          role="tooltip"
+          className="absolute z-50 left-1/2 -translate-x-1/2 bottom-full mb-2 w-72 rounded-xl border border-blue-100 bg-white shadow-lg px-4 py-3 text-xs text-gray-700 leading-relaxed"
+        >
+          <p className="font-semibold text-blue-700 mb-1">About {metricLabel}</p>
+          <p>{note}</p>
+          {/* Caret */}
+          <span className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-blue-100" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Score cards
 // ---------------------------------------------------------------------------
 
 function ScoreCard({ label, value, interpretation }: { label: string; value: number; interpretation: string }) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{label}</p>
+      <div className="flex items-center gap-0.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{label}</p>
+        <InfoPopover metricLabel={label} />
+      </div>
       <p className="mt-1 text-4xl font-bold text-gray-900">{value}</p>
       <p className="mt-2 text-sm text-gray-600">{interpretation}</p>
     </div>

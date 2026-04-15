@@ -112,11 +112,19 @@ Both differences push ClarityBot's FRE **above** Readable's, not below. The gap 
 
 **Conclusion:** The ~4-point FRE gap is a sentence-boundary calibration residual, not a syllable-counting error. Closing it further requires more refined sentence detection (e.g. distinguishing enumeration continuations from true sentence starts). Tracked as known open issue. No code changes made.
 
+**Final calibration decision (Brian, 2026-04-07):** Keep the calibrated single splitter. The +4–5 FRE gap vs. Readable.com is accepted because (a) ClarityBot scores are not cited externally, and (b) the calibrated approach is more accurate for insurance text than Readable.com's prose-tuned splitter. Scoring engine is now locked — no further changes.
+
+**Methodology disclosure UI added:** An info icon (ℹ) appears beside each score card label. On hover or click, a popover explains ClarityBot's sentence segmentation approach and why scores may differ from Readable.com. Each of the four metrics has its own note:
+- **Flesch RE:** explains ~4–5 point higher reading vs. Readable, notes identical formula, different sentence boundary detection
+- **FK Grade:** explains ~1–2 grade lower reading, explains why shorter clause units correctly reduce apparent grade level
+- **SMOG:** specifically notes ~3 grade lower reading vs. Readable, notes 30-sentence minimum for reliability
+- **Gunning Fog:** explains -ed/-es suffix exclusion rule and why it differs from tools that omit it
+
 ---
 
 ## Open questions / next steps
 
 1. **Change Set F (markdown rendering):** Awaiting Brian's approval after API key testing. Dependency question: can `marked` or `react-markdown` be added, or use regex renderer?
-2. **BASE form gap / FRE residual:** COLLCOMP and GAP are within ~1.5–4 grades of Readable.com. Gap is sentence-boundary calibration, not syllable counting (see syllable investigation above). Tracked as known open issue.
+2. **BASE form gap / FRE residual:** COLLCOMP and GAP are within ~1.5–4 grades of Readable.com. Gap is sentence-boundary calibration, not syllable counting (see syllable investigation above). Accepted — scoring engine locked.
 3. **Long-sentence diagnostic signal:** Zero long sentences on COLLCOMP after splitter calibration. A "dense paragraph" detector (flags paragraphs with high avg syllables/word even if individual sentences are short) could recover signal. Deferred to future phase.
 4. **Geographic stop-list completeness:** Multi-word state references ("New York," "New Mexico," "New Hampshire," "North Carolina," "South Carolina," "North Dakota," "South Dakota," "Rhode Island," "West Virginia") are split into component words in the stop-list. Multi-word geography detection may need a secondary phrase filter if these appear as two-word Title Case sequences. Monitor in testing.
