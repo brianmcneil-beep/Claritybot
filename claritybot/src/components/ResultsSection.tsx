@@ -5,20 +5,18 @@ import {
   interpretSmog,
   interpretGunningFog,
 } from '../utils/readabilityScorer'
-import { runDiagnostics, type DiagnosticItem } from '../utils/diagnostics'
+import { runDiagnostics, type DiagnosticItem, type IssueType, type Priority } from '../utils/diagnostics'
 
 interface ResultsSectionProps {
   text: string
   onRewrite: () => void
 }
 
-interface ScoreCardProps {
-  label: string
-  value: number
-  interpretation: string
-}
+// ---------------------------------------------------------------------------
+// Score cards
+// ---------------------------------------------------------------------------
 
-function ScoreCard({ label, value, interpretation }: ScoreCardProps) {
+function ScoreCard({ label, value, interpretation }: { label: string; value: number; interpretation: string }) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{label}</p>
@@ -28,12 +26,7 @@ function ScoreCard({ label, value, interpretation }: ScoreCardProps) {
   )
 }
 
-interface StatRowProps {
-  label: string
-  value: number | string
-}
-
-function StatRow({ label, value }: StatRowProps) {
+function StatRow({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="flex justify-between py-1 text-sm">
       <span className="text-gray-500">{label}</span>
@@ -42,30 +35,67 @@ function StatRow({ label, value }: StatRowProps) {
   )
 }
 
-interface DiagnosticGroupProps {
-  title: string
-  items: DiagnosticItem[]
-  note?: string
+// ---------------------------------------------------------------------------
+// Diagnostic UI helpers
+// ---------------------------------------------------------------------------
+
+const ISSUE_TYPE_META: Record<IssueType, { label: string; note?: string }> = {
+  LONG_SENTENCE:       { label: 'Long sentences (over 25 words)' },
+  PASSIVE_VOICE:       { label: 'Passive voice', note: 'Heuristic detection — may include false positives.' },
+  DOUBLE_NEGATIVE:     { label: 'Double negatives' },
+  NESTED_CONDITIONAL:  { label: 'Nested conditionals (3+ if/unless/provided-that clauses)' },
+  NOMINALIZATION:      { label: 'Nominalizations & verbose phrasing' },
+  JARGON:              { label: 'Insurance jargon' },
+  LONG_WORD:           { label: 'Long words (4+ syllables)' },
+  DEFINED_TERM_OVERUSE:{ label: 'Defined term overuse (5+ occurrences)' },
 }
 
-function DiagnosticGroup({ title, items, note }: DiagnosticGroupProps) {
+const PRIORITY_ORDER: Priority[] = ['high', 'medium', 'low']
+
+const PRIORITY_BADGE: Record<Priority, string> = {
+  high:   'bg-red-100 text-red-700',
+  medium: 'bg-yellow-100 text-yellow-700',
+  low:    'bg-gray-100 text-gray-500',
+}
+
+function PriorityBadge({ priority }: { priority: Priority }) {
   return (
-    <div className="mb-5">
+    <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${PRIORITY_BADGE[priority]}`}>
+      {priority}
+    </span>
+  )
+}
+
+function DiagnosticGroup({ issueType, items }: { issueType: IssueType; items: DiagnosticItem[] }) {
+  const meta = ISSUE_TYPE_META[issueType]
+
+  // Sort within group: high → medium → low
+  const sorted = [...items].sort(
+    (a, b) => PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority),
+  )
+
+  return (
+    <div className="mb-6">
       <div className="flex items-baseline gap-2 mb-2">
-        <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+        <h3 className="text-sm font-semibold text-gray-700">{meta.label}</h3>
         <span className="text-xs text-gray-400">({items.length} found)</span>
       </div>
-      {note && (
-        <p className="mb-2 text-xs text-gray-400 italic">{note}</p>
+      {meta.note && (
+        <p className="mb-2 text-xs text-gray-400 italic">{meta.note}</p>
       )}
       {items.length === 0 ? (
         <p className="text-sm text-green-600">None found.</p>
       ) : (
         <ul className="space-y-2">
-          {items.map((item, i) => (
+          {sorted.map((item, i) => (
             <li key={i} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-sm font-medium text-gray-800 break-words">"{item.text}"</p>
-              <p className="mt-0.5 text-xs text-gray-500">{item.reason}</p>
+              <div className="flex items-start justify-between gap-3 mb-1">
+                <p className="text-sm font-medium text-gray-800 break-words flex-1">
+                  "{item.problem_text}"
+                </p>
+                <PriorityBadge priority={item.priority} />
+              </div>
+              <p className="text-xs text-gray-500">{item.why_problematic}</p>
             </li>
           ))}
         </ul>
@@ -74,9 +104,35 @@ function DiagnosticGroup({ title, items, note }: DiagnosticGroupProps) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+// The display order for diagnostic groups in the UI.
+const DISPLAY_ORDER: IssueType[] = [
+  'LONG_SENTENCE',
+  'NESTED_CONDITIONAL',
+  'DOUBLE_NEGATIVE',
+  'PASSIVE_VOICE',
+  'NOMINALIZATION',
+  'JARGON',
+  'LONG_WORD',
+  'DEFINED_TERM_OVERUSE',
+]
+
 export default function ResultsSection({ text, onRewrite }: ResultsSectionProps) {
   const scores = scoreText(text)
-  const diagnostics = runDiagnostics(text)
+  const { items } = runDiagnostics(text)
+
+  // Group items by issue_type
+  const grouped = new Map<IssueType, DiagnosticItem[]>()
+  for (const type of DISPLAY_ORDER) grouped.set(type, [])
+  for (const item of items) {
+    grouped.get(item.issue_type)?.push(item)
+  }
+
+  const totalIssues = items.length
+  const highCount = items.filter(i => i.priority === 'high').length
 
   return (
     <section className="p-6 border-b border-gray-200">
@@ -106,7 +162,6 @@ export default function ResultsSection({ text, onRewrite }: ResultsSectionProps)
         />
       </div>
 
-      {/* Supporting counts */}
       <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 px-5 py-3 divide-y divide-gray-200">
         <StatRow label="Word count" value={scores.wordCount.toLocaleString()} />
         <StatRow label="Sentence count" value={scores.sentenceCount.toLocaleString()} />
@@ -114,26 +169,22 @@ export default function ResultsSection({ text, onRewrite }: ResultsSectionProps)
         <StatRow label="Avg. syllables per word" value={scores.avgSyllablesPerWord} />
       </div>
 
-      {/* Diagnostics */}
-      <h2 className="text-base font-semibold text-gray-900 mt-8 mb-4">Diagnostics</h2>
+      {/* Diagnostics header */}
+      <div className="flex items-baseline gap-3 mt-8 mb-4">
+        <h2 className="text-base font-semibold text-gray-900">Diagnostics</h2>
+        <span className="text-xs text-gray-400">{totalIssues} issues</span>
+        {highCount > 0 && (
+          <span className="text-xs font-semibold text-red-600">{highCount} high priority</span>
+        )}
+      </div>
 
-      <DiagnosticGroup
-        title="Long sentences (over 25 words)"
-        items={diagnostics.longSentences}
-      />
-      <DiagnosticGroup
-        title="Insurance jargon"
-        items={diagnostics.jargon}
-      />
-      <DiagnosticGroup
-        title="Passive voice"
-        items={diagnostics.passiveVoice}
-        note="Detected using a heuristic pattern — may include false positives."
-      />
-      <DiagnosticGroup
-        title="Long words (4+ syllables)"
-        items={diagnostics.longWords}
-      />
+      {DISPLAY_ORDER.map((issueType) => (
+        <DiagnosticGroup
+          key={issueType}
+          issueType={issueType}
+          items={grouped.get(issueType) ?? []}
+        />
+      ))}
 
       {/* Rewrite trigger */}
       <div className="mt-6 flex justify-end">

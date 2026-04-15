@@ -13,7 +13,7 @@ export default function InputSection({ text, onTextChange, onAnalyze }: InputSec
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  async function processFile(file: File) {
+  const processFile = useCallback(async (file: File) => {
     setParseError(null)
     setIsParsing(true)
     try {
@@ -26,7 +26,7 @@ export default function InputSection({ text, onTextChange, onAnalyze }: InputSec
       setIsParsing(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }
+  }, [onTextChange])
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -60,7 +60,7 @@ export default function InputSection({ text, onTextChange, onAnalyze }: InputSec
     }
 
     await processFile(file)
-  }, [])
+  }, [processFile])
 
   const canAnalyze = text.trim().length > 0
 

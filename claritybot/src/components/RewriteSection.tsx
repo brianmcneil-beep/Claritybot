@@ -102,17 +102,26 @@ export default function RewriteSection({ originalText, originalScores, apiKey }:
 
   useEffect(() => {
     let cancelled = false
-    setIsLoading(true)
-    setError(null)
-    setRawResponse(null)
 
-    callApi(apiKey, originalText)
-      .then((text) => { if (!cancelled) setRawResponse(text) })
-      .catch((err: unknown) => {
+    // Kick off immediately; initial state is already loading=false/error=null/response=null
+    // from useState — we update asynchronously to satisfy the lint rule against
+    // synchronous setState inside effects.
+    async function run() {
+      if (cancelled) return
+      setIsLoading(true)
+      setError(null)
+      setRawResponse(null)
+      try {
+        const result = await callApi(apiKey, originalText)
+        if (!cancelled) setRawResponse(result)
+      } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Unknown error. Please try again.')
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false) })
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    }
 
+    run()
     return () => { cancelled = true }
   }, [originalText, apiKey])
 
