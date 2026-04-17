@@ -7,6 +7,12 @@ import {
   interpretGunningFog,
 } from '../utils/readabilityScorer'
 import { runDiagnostics, type DiagnosticItem, type IssueType, type Priority } from '../utils/diagnostics'
+import {
+  detectLOB,
+  getLOBDisclosure,
+  LOB_LABELS,
+  type LOB,
+} from '../utils/lobDetector'
 
 interface ResultsSectionProps {
   text: string
@@ -78,6 +84,88 @@ function InfoPopover({ metricLabel }: { metricLabel: string }) {
           <p>{note}</p>
           {/* Caret */}
           <span className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-8 border-x-transparent border-t-8 border-t-blue-100" />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// LOB disclosure — collapsible banner below the score card grid
+// ---------------------------------------------------------------------------
+
+function LOBDisclosure({ text, wordCount }: { text: string; wordCount: number }) {
+  const detected = detectLOB(text, wordCount)
+  const [lob, setLOB] = useState<LOB>(detected.lob)
+  const [open, setOpen] = useState(false)
+
+  // Re-detect whenever the scored text changes (new form loaded).
+  // setState is deferred via queueMicrotask to satisfy react-hooks/set-state-in-effect.
+  const prevTextRef = useRef(text)
+  useEffect(() => {
+    if (text === prevTextRef.current) return
+    prevTextRef.current = text
+    const next = detectLOB(text, wordCount)
+    queueMicrotask(() => {
+      setLOB(next.lob)
+      setOpen(false)
+    })
+  }, [text, wordCount])
+
+  const disclosure = getLOBDisclosure(lob)
+  const isManual = lob !== detected.lob
+
+  return (
+    <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden">
+      <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+        {/* LOB selector */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs text-gray-500 shrink-0">Line of business:</span>
+          <select
+            value={lob}
+            onChange={(e) => { setLOB(e.target.value as LOB); setOpen(false) }}
+            className="text-xs font-medium text-gray-700 bg-transparent border-none outline-none cursor-pointer hover:text-blue-600 focus:text-blue-600 transition-colors truncate"
+            aria-label="Select line of business for score context"
+          >
+            {(Object.entries(LOB_LABELS) as [LOB, string][]).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          {isManual && (
+            <span className="text-xs text-blue-500 shrink-0">(manual)</span>
+          )}
+          {!isManual && (
+            <span className="text-xs text-gray-400 shrink-0">(auto-detected)</span>
+          )}
+        </div>
+
+        {/* Expand / collapse toggle — only shown when there is disclosure text */}
+        {disclosure ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-label={open ? 'Hide score context' : 'Show score context'}
+            className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 shrink-0 transition-colors"
+          >
+            <span>{open ? 'Hide context' : 'Score context'}</span>
+            <svg
+              className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`}
+              viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"
+            >
+              <path fillRule="evenodd"
+                d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"
+              />
+            </svg>
+          </button>
+        ) : (
+          <span className="text-xs text-gray-400 shrink-0">No context note for this LOB</span>
+        )}
+      </div>
+
+      {open && disclosure && (
+        <div className="border-t border-gray-200 px-4 py-3 bg-white">
+          <p className="text-xs text-gray-600 leading-relaxed">{disclosure}</p>
         </div>
       )}
     </div>
@@ -236,6 +324,8 @@ export default function ResultsSection({ text, onRewrite }: ResultsSectionProps)
           interpretation={interpretGunningFog(scores.gunningFog)}
         />
       </div>
+
+      <LOBDisclosure text={text} wordCount={scores.wordCount} />
 
       <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 px-5 py-3 divide-y divide-gray-200">
         <StatRow label="Word count" value={scores.wordCount.toLocaleString()} />
