@@ -5,6 +5,8 @@ export interface SentenceBreakdown {
   rawSentenceCount: number
   proseCount: number
   listItemCount: number
+  inlineNumberedCount: number
+  inlineNumberedMerged: number
   effectiveSentenceCount: number
 }
 
@@ -47,13 +49,49 @@ export function scoreText(text: string): ReadabilityScores {
   const totalSyllables = rs.syllableCount(text)
   const polysyllableCount = countPolysyllables(text)
 
-  // Classify sentences into prose vs. list_item.
-  // rawSentenceCount is used for display and avgWordsPerSentence.
-  // effectiveSentenceCount is used only as the S input to the four formulas.
+  // Classify sentences, then compute effectiveSentenceCount for formula use only.
+  // rawSentenceCount and avgWordsPerSentence (display) use the raw count unchanged.
   const classified = classifySentences(text)
   const rawSentenceCount = Math.max(classified.length, 1)
-  const proseCount = classified.filter((s) => s.sentenceType === 'prose').length
-  const listItemCount = classified.filter((s) => s.sentenceType === 'list_item').length
+
+  // Step 1: merge inline_numbered sub-items into their parent prose sentence.
+  // Each contiguous run of inline_numbered items that follows a prose or list_item
+  // sentence is collapsed into that parent — the run contributes 1 sentence unit
+  // (the parent), not N+1. We count how many merges occurred for the debug log.
+  let inlineNumberedCount = 0
+  let inlineNumberedMerged = 0
+
+  // Build a reduced list where inline_numbered runs are absorbed into their parent.
+  type ReducedType = 'prose' | 'list_item'
+  const reduced: ReducedType[] = []
+  let absorbingInline = false
+
+  for (const s of classified) {
+    if (s.sentenceType === 'inline_numbered') {
+      inlineNumberedCount++
+      if (absorbingInline) {
+        // Continuing a run — no new sentence unit, just increment merge count
+        inlineNumberedMerged++
+      } else if (reduced.length > 0) {
+        // Start of a new inline run — absorbed into the last unit
+        absorbingInline = true
+        inlineNumberedMerged++
+      } else {
+        // inline_numbered at document start with no parent — treat as prose
+        reduced.push('prose')
+      }
+    } else {
+      absorbingInline = false
+      reduced.push(s.sentenceType === 'prose' ? 'prose' : 'list_item')
+    }
+  }
+
+  const proseCount = reduced.filter((t) => t === 'prose').length
+  const listItemCount = reduced.filter((t) => t === 'list_item').length
+
+  // Step 2: apply fractional weighting to list_item sentences (Rec 1).
+  // inline_numbered items are already collapsed into their parent and are not
+  // counted separately here — the two rules are additive, not mutually exclusive.
   const effectiveSentenceCount = Math.max(proseCount + listItemCount * 0.65, 1)
 
   const W = wordCount
@@ -91,6 +129,8 @@ export function scoreText(text: string): ReadabilityScores {
       rawSentenceCount,
       proseCount,
       listItemCount,
+      inlineNumberedCount,
+      inlineNumberedMerged,
       effectiveSentenceCount: round(effectiveSentenceCount, 2),
     },
   }

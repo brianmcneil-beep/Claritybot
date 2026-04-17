@@ -244,6 +244,8 @@ export default function ResultsSection({ text, onRewrite }: ResultsSectionProps)
         <StatRow label="Avg. syllables per word" value={scores.avgSyllablesPerWord} />
         <StatRow label="Prose sentences" value={scores.sentenceBreakdown.proseCount.toLocaleString()} />
         <StatRow label="List-item sentences" value={scores.sentenceBreakdown.listItemCount.toLocaleString()} />
+        <StatRow label="Inline-numbered sentences" value={scores.sentenceBreakdown.inlineNumberedCount.toLocaleString()} />
+        <StatRow label="Inline-numbered merged into parent" value={scores.sentenceBreakdown.inlineNumberedMerged.toLocaleString()} />
         <StatRow label="Effective sentence count (for scores)" value={scores.sentenceBreakdown.effectiveSentenceCount} />
       </div>
 
