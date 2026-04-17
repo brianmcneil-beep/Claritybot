@@ -57,9 +57,11 @@ export function scoreText(text: string): ReadabilityScores {
   // Step 1: merge inline_numbered sub-items into their parent prose sentence.
   // Each contiguous run of inline_numbered items that follows a prose or list_item
   // sentence is collapsed into that parent — the run contributes 1 sentence unit
-  // (the parent), not N+1. We count how many merges occurred for the debug log.
+  // (the parent), not N+1. We count how many merges occurred for the debug log,
+  // and accumulate the total word count of merged items for the Fog adjustment.
   let inlineNumberedCount = 0
   let inlineNumberedMerged = 0
+  let mergedInlineWordCount = 0  // words that came from absorbed inline_numbered items
 
   // Build a reduced list where inline_numbered runs are absorbed into their parent.
   type ReducedType = 'prose' | 'list_item'
@@ -69,13 +71,14 @@ export function scoreText(text: string): ReadabilityScores {
   for (const s of classified) {
     if (s.sentenceType === 'inline_numbered') {
       inlineNumberedCount++
+      const wc = rs.lexiconCount(s.text)
       if (absorbingInline) {
-        // Continuing a run — no new sentence unit, just increment merge count
         inlineNumberedMerged++
+        mergedInlineWordCount += wc
       } else if (reduced.length > 0) {
-        // Start of a new inline run — absorbed into the last unit
         absorbingInline = true
         inlineNumberedMerged++
+        mergedInlineWordCount += wc
       } else {
         // inline_numbered at document start with no parent — treat as prose
         reduced.push('prose')
@@ -90,14 +93,20 @@ export function scoreText(text: string): ReadabilityScores {
   const listItemCount = reduced.filter((t) => t === 'list_item').length
 
   // Step 2: apply fractional weighting to list_item sentences (Rec 1).
-  // inline_numbered items are already collapsed into their parent and are not
-  // counted separately here — the two rules are additive, not mutually exclusive.
   const effectiveSentenceCount = Math.max(proseCount + listItemCount * 0.65, 1)
 
   const W = wordCount
-  const S = effectiveSentenceCount      // formula input only
+  const S = effectiveSentenceCount      // sentence input for FRE, FK, SMOG, Fog
   const sylPerWord = W > 0 ? totalSyllables / W : 0
-  const wordsPerSentence = W / S        // uses effective count for score formulas
+  const wordsPerSentence = W / S        // used by FRE, FK, SMOG unchanged
+
+  // For Gunning Fog ASL only: words from merged inline_numbered items are
+  // weighted at 0.75 instead of 1.0 to reduce the sentence-length inflation
+  // that merging causes. FRE and FK are computed with the unweighted wordsPerSentence.
+  //   W_fog = (W - mergedWords) + mergedWords × 0.75
+  //         = W - mergedWords × 0.25
+  const W_fog = W - mergedInlineWordCount * 0.25
+  const fogASL = W_fog / S
 
   const fleschReadingEase = clamp(
     206.835 - 1.015 * wordsPerSentence - 84.6 * sylPerWord,
@@ -113,7 +122,7 @@ export function scoreText(text: string): ReadabilityScores {
     : 0
   const gunningFog = Math.max(
     0,
-    0.4 * (wordsPerSentence + 100 * (W > 0 ? polysyllableCount / W : 0)),
+    0.4 * (fogASL + 100 * (W > 0 ? polysyllableCount / W : 0)),
   )
 
   return {
