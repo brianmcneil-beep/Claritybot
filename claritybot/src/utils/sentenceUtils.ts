@@ -45,20 +45,26 @@ function markBoundaries(text: string): string {
 
   // Step 5: numbered/lettered list items → BREAK_SENTINEL prefix.
   // Patterns covered (insurance policies use all of these):
-  //   1.   2.   10.          digit(s) + period
-  //   a.   b.               lowercase letter + period
-  //   A.   B.               uppercase letter + period
-  //   1)   2)               digit(s) + closing paren
-  //   a)   b)               lowercase letter + closing paren
+  //   1.   2.   10.          digit(s) + period + space
+  //   a.   b.   A.  B.       letter + period + space
+  //   1)   2)               digit(s) + closing paren + space
+  //   a)   b)   A)  B)       letter + closing paren + space
   //   (1)  (2)              opening paren + digit(s) + closing paren
-  //   (a)  (b)              opening paren + letter + closing paren
+  //   (a)  (b)  (A)  (B)    opening paren + letter + closing paren
   //
-  // The lookbehind requires whitespace or start-of-string to avoid matching
-  // mid-sentence constructs like "section 1.2" or "subsection (a)(i)".
-  const withNumbered = withSemicolons.replace(
-    /(?<=\s|^)(\(\d+\)|\([a-zA-Z]\)|\d+[.)]\s|\s*[a-zA-Z][.)](?=\s))/g,
-    `${BREAK_SENTINEL}$1`,
+  // The lookbehind must allow PARA_SENTINEL (\u001E) and BREAK_SENTINEL (\u001F)
+  // in addition to whitespace and start-of-string. Steps 2–4 have already placed
+  // sentinels directly adjacent to list markers — there is no \s between them.
+  // Without including sentinels in the lookbehind, "(1) collision" after a
+  // semicolon would never be split because \u001F(1) fails (?<=\s).
+  // Use new RegExp to avoid embedding literal control characters (ESLint no-control-regex).
+  // The lookbehind includes PARA_SENTINEL and BREAK_SENTINEL so that enumeration markers
+  // immediately following a sentinel (e.g. \u001F(1) after a semicolon) are also split.
+  const numberedRE = new RegExp(
+    `(?<=[\\s${PARA_SENTINEL}${BREAK_SENTINEL}]|^)(\\(\\d+\\)|\\([a-zA-Z]\\)|\\d+[.)]\\s|[a-zA-Z][.)]\\s)`,
+    'g',
   )
+  const withNumbered = withSemicolons.replace(numberedRE, `${BREAK_SENTINEL}$1`)
 
   return withNumbered
 }
