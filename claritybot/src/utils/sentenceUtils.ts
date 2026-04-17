@@ -45,6 +45,19 @@ function markBoundaries(text: string): string {
   return withNumbered
 }
 
+export type SentenceType = 'prose' | 'list_item'
+
+export interface ClassifiedSentence {
+  text: string
+  sentenceType: SentenceType
+}
+
+// Bullet characters that mark list items in insurance documents.
+const BULLET_RE = /^[\u2022\u25CF\u25AA\u2013\u2014●•\-*]\s*/
+
+// Numbered list item: starts with one or more digits followed by a period/paren.
+const NUMBERED_ITEM_RE = /^\d+[.)]\s+/
+
 /**
  * Split text into sentence-sized strings.
  *
@@ -58,6 +71,47 @@ export function splitIntoSentences(text: string): string[] {
     .split(BREAK_SENTINEL)
     .map((s) => s.replace(new RegExp(DOT_SENTINEL, 'g'), '.').trim())
     .filter((s) => rs.lexiconCount(s) >= 2)
+}
+
+/**
+ * Split text into classified sentences.
+ *
+ * A sentence is tagged "list_item" if it:
+ *   (a) starts with a bullet character (●, -, *, •, etc.)
+ *   (b) starts with a numbered list marker (1. 2. etc.)
+ *   (c) contains fewer than 10 words AND immediately follows a sentence
+ *       that ends with a colon
+ *
+ * All other sentences are tagged "prose".
+ *
+ * The classification is used only in readability formula weighting.
+ * Diagnostic display and counts use the raw sentence list unchanged.
+ */
+export function classifySentences(text: string): ClassifiedSentence[] {
+  const raw = splitIntoSentences(text)
+  return raw.map((sentence, i) => {
+    const trimmed = sentence.trimStart()
+
+    // Condition (a): starts with a bullet character
+    if (BULLET_RE.test(trimmed)) {
+      return { text: sentence, sentenceType: 'list_item' }
+    }
+
+    // Condition (b): starts with a numbered list marker
+    if (NUMBERED_ITEM_RE.test(trimmed)) {
+      return { text: sentence, sentenceType: 'list_item' }
+    }
+
+    // Condition (c): short sentence immediately following a colon-ending sentence
+    if (i > 0) {
+      const prev = raw[i - 1].trimEnd()
+      if (prev.endsWith(':') && rs.lexiconCount(sentence) < 10) {
+        return { text: sentence, sentenceType: 'list_item' }
+      }
+    }
+
+    return { text: sentence, sentenceType: 'prose' }
+  })
 }
 
 /**

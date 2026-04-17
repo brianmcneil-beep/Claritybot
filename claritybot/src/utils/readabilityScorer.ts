@@ -1,5 +1,12 @@
 import rs from 'text-readability'
-import { countSentences } from './sentenceUtils'
+import { classifySentences } from './sentenceUtils'
+
+export interface SentenceBreakdown {
+  rawSentenceCount: number
+  proseCount: number
+  listItemCount: number
+  effectiveSentenceCount: number
+}
 
 export interface ReadabilityScores {
   fleschReadingEase: number
@@ -10,6 +17,7 @@ export interface ReadabilityScores {
   sentenceCount: number
   avgWordsPerSentence: number
   avgSyllablesPerWord: number
+  sentenceBreakdown: SentenceBreakdown
 }
 
 /**
@@ -36,14 +44,22 @@ export interface ReadabilityScores {
  */
 export function scoreText(text: string): ReadabilityScores {
   const wordCount = rs.lexiconCount(text)
-  const sentenceCount = countSentences(text)
   const totalSyllables = rs.syllableCount(text)
   const polysyllableCount = countPolysyllables(text)
 
+  // Classify sentences into prose vs. list_item.
+  // rawSentenceCount is used for display and avgWordsPerSentence.
+  // effectiveSentenceCount is used only as the S input to the four formulas.
+  const classified = classifySentences(text)
+  const rawSentenceCount = Math.max(classified.length, 1)
+  const proseCount = classified.filter((s) => s.sentenceType === 'prose').length
+  const listItemCount = classified.filter((s) => s.sentenceType === 'list_item').length
+  const effectiveSentenceCount = Math.max(proseCount + listItemCount * 0.65, 1)
+
   const W = wordCount
-  const S = sentenceCount
+  const S = effectiveSentenceCount      // formula input only
   const sylPerWord = W > 0 ? totalSyllables / W : 0
-  const wordsPerSentence = W / S
+  const wordsPerSentence = W / S        // uses effective count for score formulas
 
   const fleschReadingEase = clamp(
     206.835 - 1.015 * wordsPerSentence - 84.6 * sylPerWord,
@@ -54,7 +70,6 @@ export function scoreText(text: string): ReadabilityScores {
     0,
     0.39 * wordsPerSentence + 11.8 * sylPerWord - 15.59,
   )
-  // SMOG requires at least 30 sentences for accuracy; surface the raw number anyway.
   const smogIndex = S > 0
     ? Math.max(0, 3 + Math.sqrt(polysyllableCount * (30 / S)))
     : 0
@@ -69,9 +84,15 @@ export function scoreText(text: string): ReadabilityScores {
     smogIndex: round(smogIndex, 1),
     gunningFog: round(gunningFog, 1),
     wordCount: W,
-    sentenceCount: S,
-    avgWordsPerSentence: round(wordsPerSentence, 1),
+    sentenceCount: rawSentenceCount,    // raw count for display
+    avgWordsPerSentence: round(W / rawSentenceCount, 1),  // raw count for display
     avgSyllablesPerWord: round(sylPerWord, 2),
+    sentenceBreakdown: {
+      rawSentenceCount,
+      proseCount,
+      listItemCount,
+      effectiveSentenceCount: round(effectiveSentenceCount, 2),
+    },
   }
 }
 

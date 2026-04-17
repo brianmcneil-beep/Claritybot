@@ -239,9 +239,12 @@ export default function ResultsSection({ text, onRewrite }: ResultsSectionProps)
 
       <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 px-5 py-3 divide-y divide-gray-200">
         <StatRow label="Word count" value={scores.wordCount.toLocaleString()} />
-        <StatRow label="Sentence count" value={scores.sentenceCount.toLocaleString()} />
+        <StatRow label="Sentence count (raw)" value={scores.sentenceCount.toLocaleString()} />
         <StatRow label="Avg. words per sentence" value={scores.avgWordsPerSentence} />
         <StatRow label="Avg. syllables per word" value={scores.avgSyllablesPerWord} />
+        <StatRow label="Prose sentences" value={scores.sentenceBreakdown.proseCount.toLocaleString()} />
+        <StatRow label="List-item sentences" value={scores.sentenceBreakdown.listItemCount.toLocaleString()} />
+        <StatRow label="Effective sentence count (for scores)" value={scores.sentenceBreakdown.effectiveSentenceCount} />
       </div>
 
       {/* Diagnostics header */}
