@@ -94,6 +94,7 @@ function InfoPopover({ metricLabel }: { metricLabel: string }) {
 // LOB disclosure — collapsible banner below the score card grid
 // ---------------------------------------------------------------------------
 
+/** Disclosure UI only — `lob` state affects `getLOBDisclosure(lob)` text only, never scores. */
 function LOBDisclosure({ text, wordCount }: { text: string; wordCount: number }) {
   const detected = detectLOB(text, wordCount)
   const [lob, setLOB] = useState<LOB>(detected.lob)
@@ -284,6 +285,8 @@ const DISPLAY_ORDER: IssueType[] = [
 ]
 
 export default function ResultsSection({ text, onRewrite }: ResultsSectionProps) {
+  // Scoring and diagnostics depend only on `text`. LOB dropdown state must never
+  // feed into scoreText, runDiagnostics, or any displayed numeric score.
   const scores = scoreText(text)
   const { items } = runDiagnostics(text)
 
