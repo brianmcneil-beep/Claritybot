@@ -1,10 +1,21 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './index.css'
 import Header from './components/Header'
 import InputSection from './components/InputSection'
 import ResultsSection from './components/ResultsSection'
 import RewriteSection from './components/RewriteSection'
 import { scoreText, type ReadabilityScores } from './utils/readabilityScorer'
+import { debugClassifySentences } from './utils/sentenceUtils'
+
+// Expose debug helper on window so it's callable from the browser console:
+//   window.__debugSentences(20)   — first 20 evaluated candidates
+//   console.table(window.__debugSentences(50))
+declare global {
+  interface Window {
+    __debugSentences: (limit?: number) => ReturnType<typeof debugClassifySentences>
+    __clarityText: string
+  }
+}
 
 const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
 
@@ -33,6 +44,12 @@ export default function App() {
   const [hasAnalyzed, setHasAnalyzed] = useState(false)
   const [hasRewrite, setHasRewrite] = useState(false)
   const [analyzedScores, setAnalyzedScores] = useState<ReadabilityScores | null>(null)
+
+  // Keep window debug refs in sync with current text
+  useEffect(() => {
+    window.__clarityText = text
+    window.__debugSentences = (limit = 20) => debugClassifySentences(text, limit)
+  }, [text])
 
   function handleAnalyze() {
     setAnalyzedScores(scoreText(text))

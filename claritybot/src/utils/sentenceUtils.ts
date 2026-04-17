@@ -43,12 +43,20 @@ function markBoundaries(text: string): string {
   // Step 4: semicolons → BREAK_SENTINEL
   const withSemicolons = withStandard.replace(/;\s*/g, BREAK_SENTINEL)
 
-  // Step 5: numbered list items (1. 2. a. b.) → BREAK_SENTINEL prefix
-  // These may follow either a PARA_SENTINEL (standalone) or inline newline (sub-item).
-  // The sentinel that precedes the item is preserved; we just insert BREAK_SENTINEL
-  // before the number marker to create the split point.
+  // Step 5: numbered/lettered list items → BREAK_SENTINEL prefix.
+  // Patterns covered (insurance policies use all of these):
+  //   1.   2.   10.          digit(s) + period
+  //   a.   b.               lowercase letter + period
+  //   A.   B.               uppercase letter + period
+  //   1)   2)               digit(s) + closing paren
+  //   a)   b)               lowercase letter + closing paren
+  //   (1)  (2)              opening paren + digit(s) + closing paren
+  //   (a)  (b)              opening paren + letter + closing paren
+  //
+  // The lookbehind requires whitespace or start-of-string to avoid matching
+  // mid-sentence constructs like "section 1.2" or "subsection (a)(i)".
   const withNumbered = withSemicolons.replace(
-    /(?<=\s|^)(\d+\.|[a-z]\.)(?=\s)/g,
+    /(?<=\s|^)(\(\d+\)|\([a-zA-Z]\)|\d+[.)]\s|\s*[a-zA-Z][.)](?=\s))/g,
     `${BREAK_SENTINEL}$1`,
   )
 
@@ -66,7 +74,8 @@ export interface ClassifiedSentence {
 const BULLET_RE = /^[\u2022\u25CF\u25AA\u2013\u2014●•\-*]\s*/
 
 // Numbered or lettered list marker at start of text.
-const NUMBERED_ITEM_RE = /^\d+[.)]\s+|^[a-z][.)]\s+/
+// Covers: 1. 1) (1) a. a) (a) A. A) (A) — all common insurance policy formats.
+const NUMBERED_ITEM_RE = /^(\(\d+\)|\([a-zA-Z]\)|\d+[.)]\s|[a-zA-Z][.)]\s)/
 
 /**
  * Split text into sentence-sized strings (raw, unclassified).
@@ -191,4 +200,121 @@ export function classifySentences(text: string): ClassifiedSentence[] {
  */
 export function countSentences(text: string): number {
   return Math.max(splitIntoSentences(text).length, 1)
+}
+
+// ---------------------------------------------------------------------------
+// Debug utility — call from browser console or a test harness
+// ---------------------------------------------------------------------------
+
+export interface SentenceDebugEntry {
+  index: number
+  text: string
+  sentinel: 'PARA' | 'BREAK' | 'START'
+  isBullet: boolean
+  isNumberedMarker: boolean
+  prevType: SentenceType | null
+  prevEndsColon: boolean
+  wordCount: number
+  result: SentenceType
+  reason: string
+}
+
+/**
+ * debugClassifySentences(text, limit?)
+ *
+ * Returns per-sentence classification trace entries. Each entry explains
+ * exactly which condition matched (or didn't) and the final assigned type.
+ *
+ * Usage in browser console after pasting text into the textarea:
+ *   import('/src/utils/sentenceUtils.ts').then(m =>
+ *     console.table(m.debugClassifySentences(window.__clarityText, 20))
+ *   )
+ *
+ * Or expose window.__debugSentences from App.tsx for easier access.
+ */
+export function debugClassifySentences(
+  text: string,
+  limit = 20,
+): SentenceDebugEntry[] {
+  const marked = markBoundaries(text)
+  const SPLIT_RE = new RegExp(`([${PARA_SENTINEL}${BREAK_SENTINEL}])`)
+  const parts = marked.split(SPLIT_RE)
+
+  const units: Array<{ sentinel: string; raw: string }> = []
+  let i = 0
+  if (parts.length > 0 && parts[0] !== PARA_SENTINEL && parts[0] !== BREAK_SENTINEL) {
+    units.push({ sentinel: 'START', raw: parts[0] })
+    i = 1
+  }
+  while (i < parts.length) {
+    const sentinel = parts[i] ?? PARA_SENTINEL
+    const raw = parts[i + 1] ?? ''
+    units.push({ sentinel, raw })
+    i += 2
+  }
+
+  const cleaned = units
+    .map((u) => ({
+      sentinel: u.sentinel === PARA_SENTINEL ? 'PARA' : u.sentinel === BREAK_SENTINEL ? 'BREAK' : 'START',
+      text: u.raw.replace(new RegExp(DOT_SENTINEL, 'g'), '.').trim(),
+    }))
+    .filter((u) => rs.lexiconCount(u.text) >= 2) as Array<{ sentinel: 'PARA' | 'BREAK' | 'START'; text: string }>
+
+  const entries: SentenceDebugEntry[] = []
+  const assigned: SentenceType[] = []
+
+  for (let idx = 0; idx < cleaned.length; idx++) {
+    const unit = cleaned[idx]
+    const trimmed = unit.text.trimStart()
+    const wc = rs.lexiconCount(unit.text)
+    const isBullet = BULLET_RE.test(trimmed)
+    const isNum = NUMBERED_ITEM_RE.test(trimmed)
+    const prevType: SentenceType | null = assigned.length > 0 ? assigned[assigned.length - 1] : null
+    const prevEndsColon = idx > 0 ? cleaned[idx - 1].text.trimEnd().endsWith(':') : false
+
+    let result: SentenceType
+    let reason: string
+
+    if (isBullet) {
+      result = 'list_item'; reason = 'bullet character match'
+    } else if (isNum && unit.sentinel === 'PARA') {
+      result = 'list_item'; reason = 'numbered marker + PARA_SENTINEL (blank line before)'
+    } else if (isNum && unit.sentinel !== 'PARA') {
+      if (prevType === 'list_item') {
+        result = 'list_item'; reason = `numbered marker + ${unit.sentinel} + prev=list_item (list continuation)`
+      } else {
+        result = 'inline_numbered'; reason = `numbered marker + ${unit.sentinel} + prev=${prevType ?? 'none'} → inline sub-item`
+      }
+    } else if (prevEndsColon && wc < 10) {
+      result = 'list_item'; reason = `prev ends with colon + wordCount=${wc} < 10`
+    } else if (!isNum && isBullet === false) {
+      result = 'prose'
+      const reasons: string[] = []
+      if (isNum) reasons.push('has numbered marker but conditions not met')
+      if (!isBullet) reasons.push('no bullet')
+      if (!prevEndsColon) reasons.push('prev does not end with colon')
+      if (wc >= 10) reasons.push(`wordCount=${wc} ≥ 10`)
+      reason = reasons.length ? reasons.join('; ') : 'no list conditions met → prose'
+    } else {
+      result = 'prose'; reason = 'fallthrough → prose'
+    }
+
+    assigned.push(result)
+    entries.push({
+      index: idx,
+      text: unit.text.slice(0, 80) + (unit.text.length > 80 ? '…' : ''),
+      sentinel: unit.sentinel,
+      isBullet,
+      isNumberedMarker: isNum,
+      prevType,
+      prevEndsColon,
+      wordCount: wc,
+      result,
+      reason,
+    })
+
+    if (entries.length >= limit) break
+  }
+
+  return entries
 }
