@@ -44,24 +44,35 @@ function markBoundaries(text: string): string {
   const withSemicolons = withStandard.replace(/;\s*/g, BREAK_SENTINEL)
 
   // Step 5: numbered/lettered list items → BREAK_SENTINEL prefix.
-  // Patterns covered (insurance policies use all of these):
-  //   1.   2.   10.          digit(s) + period + space
-  //   a.   b.   A.  B.       letter + period + space
-  //   1)   2)               digit(s) + closing paren + space
-  //   a)   b)   A)  B)       letter + closing paren + space
-  //   (1)  (2)              opening paren + digit(s) + closing paren
-  //   (a)  (b)  (A)  (B)    opening paren + letter + closing paren
   //
-  // The lookbehind must allow PARA_SENTINEL (\u001E) and BREAK_SENTINEL (\u001F)
-  // in addition to whitespace and start-of-string. Steps 2–4 have already placed
-  // sentinels directly adjacent to list markers — there is no \s between them.
-  // Without including sentinels in the lookbehind, "(1) collision" after a
-  // semicolon would never be split because \u001F(1) fails (?<=\s).
-  // Use new RegExp to avoid embedding literal control characters (ESLint no-control-regex).
-  // The lookbehind includes PARA_SENTINEL and BREAK_SENTINEL so that enumeration markers
-  // immediately following a sentinel (e.g. \u001F(1) after a semicolon) are also split.
+  // Patterns covered:
+  //   Digit formats:    1.  2.  10.  (1)  (2)  1)  2)
+  //   Letter formats:   a.  b.  A.   (a)  (b)  a)  b)  (note: single letter only;
+  //                     multi-letter roman numerals handled separately below)
+  //   Lower roman:      i.  ii.  iii.  iv.  v.  vi.  vii.  viii.  ix.  x.
+  //                     (i) (ii) (iii) (iv) (v) (vi) (vii) (viii) (ix) (x)
+  //   Upper roman:      I.  II.  III.  IV.  V.
+  //                     (I) (II) (III) (IV) (V)
+  //
+  // Lookbehind (?<=[\s\u001E\u001F]|^) includes PARA_SENTINEL and BREAK_SENTINEL
+  // because steps 2–4 place sentinels directly adjacent to markers with no \s gap.
+  //
+  // Roman numeral alternation ordered longest-first to prevent partial matches
+  // (e.g. "ii" must be tried before "i" so "iii" isn't matched as "i" + "ii").
+  //
+  // Use new RegExp() to avoid ESLint no-control-regex on the sentinel characters.
+  const LOWER_ROMAN = 'viii|iii|vii|ii|iv|vi|ix|i|v|x'
+  const UPPER_ROMAN = 'III|II|IV|I|V'
+
   const numberedRE = new RegExp(
-    `(?<=[\\s${PARA_SENTINEL}${BREAK_SENTINEL}]|^)(\\(\\d+\\)|\\([a-zA-Z]\\)|\\d+[.)]\\s|[a-zA-Z][.)]\\s)`,
+    `(?<=[\\s${PARA_SENTINEL}${BREAK_SENTINEL}]|^)(` +
+    `\\(\\d+\\)|` +                                 // (1) (2) (10)
+    `\\([a-zA-Z]\\)|` +                             // (a) (b) (A) (B)
+    `\\((?:${LOWER_ROMAN}|${UPPER_ROMAN})\\)|` +    // (i) (ii) … (viii) (I) … (V)
+    `\\d+[.)]\\s|` +                                // 1. 2. 1) 2)
+    `[a-zA-Z][.)]\\s|` +                            // a. b. A. B. a) b)
+    `(?:${LOWER_ROMAN}|${UPPER_ROMAN})[.]\\s` +     // i. ii. … viii. I. … V.
+    `)`,
     'g',
   )
   const withNumbered = withSemicolons.replace(numberedRE, `${BREAK_SENTINEL}$1`)
@@ -80,8 +91,20 @@ export interface ClassifiedSentence {
 const BULLET_RE = /^[\u2022\u25CF\u25AA\u2013\u2014●•\-*]\s*/
 
 // Numbered or lettered list marker at start of text.
-// Covers: 1. 1) (1) a. a) (a) A. A) (A) — all common insurance policy formats.
-const NUMBERED_ITEM_RE = /^(\(\d+\)|\([a-zA-Z]\)|\d+[.)]\s|[a-zA-Z][.)]\s)/
+// Covers all formats handled by markBoundaries step 5, including roman numerals.
+// Alternation ordered longest-first to avoid partial roman numeral matches.
+const LOWER_ROMAN_RE = 'viii|iii|vii|ii|iv|vi|ix|i|v|x'
+const UPPER_ROMAN_RE = 'III|II|IV|I|V'
+const NUMBERED_ITEM_RE = new RegExp(
+  `^(` +
+  `\\(\\d+\\)|` +
+  `\\([a-zA-Z]\\)|` +
+  `\\((?:${LOWER_ROMAN_RE}|${UPPER_ROMAN_RE})\\)|` +
+  `\\d+[.)]\\s|` +
+  `[a-zA-Z][.)]\\s|` +
+  `(?:${LOWER_ROMAN_RE}|${UPPER_ROMAN_RE})[.]\\s` +
+  `)`,
+)
 
 /**
  * Split text into sentence-sized strings (raw, unclassified).
