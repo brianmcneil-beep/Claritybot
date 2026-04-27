@@ -13,6 +13,8 @@ import {
   LOB_LABELS,
   type LOB,
 } from '../utils/lobDetector'
+import { INSURANCE_GLOSSARY, LONG_WORD_SYNONYMS } from '../data/insuranceGlossary'
+import DocumentAnalysis from './DocumentAnalysis'
 
 interface ResultsSectionProps {
   text: string
@@ -251,17 +253,39 @@ function DiagnosticGroup({ issueType, items }: { issueType: IssueType; items: Di
         <p className="text-sm text-green-600">None found.</p>
       ) : (
         <ul className="space-y-2">
-          {sorted.map((item, i) => (
-            <li key={i} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-              <div className="flex items-start justify-between gap-3 mb-1">
-                <p className="text-sm font-medium text-gray-800 break-words flex-1">
-                  "{item.problem_text}"
-                </p>
-                <PriorityBadge priority={item.priority} />
-              </div>
-              <p className="text-xs text-gray-500">{item.why_problematic}</p>
-            </li>
-          ))}
+          {sorted.map((item, i) => {
+            // Inline suggestion lookup
+            let suggestion: string | undefined
+            if (item.issue_type === 'JARGON') {
+              suggestion = INSURANCE_GLOSSARY[item.problem_text.toLowerCase()]
+            } else if (item.issue_type === 'LONG_WORD') {
+              suggestion = LONG_WORD_SYNONYMS[item.problem_text.toLowerCase()]
+            }
+            const suggestionText = suggestion
+              ? `Suggested alternative: "${suggestion}"`
+              : (item.issue_type === 'JARGON' || item.issue_type === 'LONG_WORD')
+                ? item.issue_type === 'JARGON'
+                  ? 'Consider replacing with a plain-language description of what this term means to the policyholder.'
+                  : 'Consider replacing with a shorter, more familiar word.'
+                : undefined
+
+            return (
+              <li key={i} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+                <div className="flex items-start justify-between gap-3 mb-1">
+                  <p className="text-sm font-medium text-gray-800 break-words flex-1">
+                    "{item.problem_text}"
+                  </p>
+                  <PriorityBadge priority={item.priority} />
+                </div>
+                <p className="text-xs text-gray-500">{item.why_problematic}</p>
+                {suggestionText && (
+                  <p className="text-xs text-blue-600 mt-1">
+                    💡 {suggestionText}
+                  </p>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>
@@ -340,6 +364,11 @@ export default function ResultsSection({ text, onRewrite }: ResultsSectionProps)
         <StatRow label="Inline-numbered sentences" value={scores.sentenceBreakdown.inlineNumberedCount.toLocaleString()} />
         <StatRow label="Inline-numbered merged into parent" value={scores.sentenceBreakdown.inlineNumberedMerged.toLocaleString()} />
         <StatRow label="Effective sentence count (for scores)" value={scores.sentenceBreakdown.effectiveSentenceCount} />
+      </div>
+
+      {/* Document Analysis panel (enhancements 1–7) */}
+      <div className="mt-5">
+        <DocumentAnalysis text={text} scores={scores} />
       </div>
 
       {/* Diagnostics header */}
